@@ -1,0 +1,27 @@
+{
+  "name": "us-equity-contract-etf-platform",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n api,web \"node server/index.mjs\" \"vite --host 127.0.0.1\"",
+    "dev:web": "vite --host 127.0.0.1",
+    "dev:api": "node server/index.mjs",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "express": "^5.3.0",
+    "lucide-react": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "vite": "latest"
+  },
+  "devDependencies": {
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "concurrently": "^10.0.7",
+    "typescript": "latest"
+  }
+}

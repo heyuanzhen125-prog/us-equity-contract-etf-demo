@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Activity, ArrowDown, ArrowUp, Clock3, Sparkles } from 'lucide-react'
+import { useVisiblePolling } from './useVisiblePolling'
 
 type DemoProject = { id: string; symbol: string; name: string; startPrice: number; lastPrice: number; targetChangePct: number; curve: number[]; simulated: true }
 type Prediction = { id: string; projectSymbol: string; direction: 'up' | 'down'; durationSeconds: number; stake: number; payoutPercent: number; status: 'pending' | 'won' | 'lost' | 'draw'; result: 'won' | 'lost' | 'draw' | null; entryPrice: number; exitPrice: number | null; payout: number | null; profit: number | null; createdAt: string }
@@ -27,39 +28,30 @@ export default function SecondsContractPanel({ projects, personalId, onRegister,
     if (projects.length && !projects.some(project => project.id === projectId)) setProjectId(projects[0].id)
   }, [projects, projectId])
   useEffect(() => { if (durations.length && !durations.includes(duration)) setDuration(durations[0]) }, [durations, duration])
-  useEffect(() => {
-    setQuotedPayout(payoutPercent)
-    let active = true
-    const refreshQuote = async () => {
-      try {
-        const query = new URLSearchParams({ direction, projectId: selected?.id || '' })
-        const response = await fetch(`/api/time-contracts/quote?${query}`)
-        if (!response.ok) return
-        const result = await response.json()
-        if (active && Number.isFinite(result.payoutPercent)) setQuotedPayout(result.payoutPercent)
-      } catch { /* local API may still be starting */ }
+  useEffect(() => { setQuotedPayout(payoutPercent) }, [payoutPercent])
+  useVisiblePolling(async signal => {
+    try {
+      const query = new URLSearchParams({ direction, projectId: selected?.id || '' })
+      const response = await fetch(`/api/time-contracts/quote?${query}`, { signal })
+      if (!response.ok) return
+      const result = await response.json()
+      if (Number.isFinite(result.payoutPercent)) setQuotedPayout(result.payoutPercent)
+    } catch (error) {
+      if (!signal.aborted) console.error('Unable to refresh contract quote', error)
     }
-    void refreshQuote()
-    const timer = window.setInterval(refreshQuote, autoPayoutEnabled ? 1500 : 5000)
-    return () => { active = false; window.clearInterval(timer) }
-  }, [direction, selected?.id, payoutPercent, autoPayoutEnabled])
-  useEffect(() => {
+  }, autoPayoutEnabled ? 1500 : 5000, true, [direction, selected?.id, autoPayoutEnabled])
+  useVisiblePolling(async signal => {
     if (!personalId) return
-    let active = true
-    const refresh = async () => {
-      try {
-        const response = await fetch(`/api/time-contracts?personalId=${encodeURIComponent(personalId)}`)
-        if (!response.ok) return
-        const result = await response.json()
-        if (!active) return
-        setBalance(result.balance)
-        setHistory(result.contracts)
-      } catch { /* the local API may still be starting */ }
+    try {
+      const response = await fetch(`/api/time-contracts?personalId=${encodeURIComponent(personalId)}`, { signal })
+      if (!response.ok) return
+      const result = await response.json()
+      setBalance(result.balance)
+      setHistory(result.contracts)
+    } catch (error) {
+      if (!signal.aborted) console.error('Unable to refresh time contracts', error)
     }
-    void refresh()
-    const timer = window.setInterval(refresh, pendingCount ? 1000 : 5000)
-    return () => { active = false; window.clearInterval(timer) }
-  }, [personalId, pendingCount])
+  }, pendingCount ? 1000 : 5000, Boolean(personalId), [personalId])
 
   const submit = async () => {
     if (!personalId) { onRegister(); notify('请先注册账户，为模拟合约绑定个人 ID'); return }

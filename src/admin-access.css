@@ -1,0 +1,69 @@
+.access-view{max-width:1320px}
+.access-refresh,.access-new-role button,.access-user-save,.access-user-status,.access-remove-role,.access-cancel{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:30px;padding:0 10px;border:1px solid #2b3340;border-radius:6px;background:#141a23;color:#b8bfca;font-size:10px}
+.access-refresh{height:30px}
+.access-note{display:flex;align-items:flex-start;gap:9px;margin:0 0 14px;padding:11px 12px;border:1px solid #303351;border-radius:8px;background:#191a2b;color:#aaa9c6;font-size:10px;line-height:1.55}
+.access-note svg{flex:none;color:#b5afff}
+.access-warning{border-color:#48402b;background:#242117;color:#d4c38f}
+.access-warning svg{color:#e4c875}
+.access-panel{margin-bottom:14px;border:1px solid #252b35;border-radius:9px;background:#11151d;overflow:hidden}
+.access-panel>header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px;border-bottom:1px solid #242a34}
+.access-panel>header h2{margin:0;color:#e3e5eb;font-size:12px}
+.access-panel>header p{margin:5px 0 0;color:#7e8795;font-size:9px}
+.access-new-role{display:flex;gap:6px}
+.access-new-role input,.access-role-head input,.access-create-user input,.access-create-user select,.access-user input,.access-user select,.agent-form input,.agent-form textarea{min-width:0;height:32px;padding:0 9px;border:1px solid #303744;border-radius:5px;background:#0e1219;color:#e8eaf0;font:inherit;font-size:10px}
+.access-new-role button{background:#24213b;border-color:#49436f;color:#c5bfff}
+.access-roles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:12px}
+.access-role{min-width:0;padding:12px;border:1px solid #272e39;border-radius:7px;background:#141922}
+.access-role-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.access-role-head input{flex:1;font-weight:650}
+.access-role-head input:disabled{opacity:1;color:#c9c4ff}
+.access-role-head span{color:#727c8a;font-size:8px}
+.access-module-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.access-module-list label,.agent-active-check{display:flex;align-items:center;gap:6px;color:#aab1bd;font-size:9px}
+.access-module-list input,.agent-active-check input{accent-color:#8179ef}
+.access-remove-role{margin-top:11px;min-height:25px;border-color:#453034;background:#21181c;color:#db9b9d;font-size:9px}
+.access-save{display:flex;align-items:center;justify-content:center;gap:6px;width:auto;min-width:170px;margin:0 12px 12px}
+.access-create-user{display:grid;grid-template-columns:1fr 1.2fr 1fr auto;align-items:end;gap:9px;padding:13px;border-bottom:1px solid #242a34}
+.access-create-user label,.agent-form>label{display:grid;gap:6px;color:#aeb5c0;font-size:9px}
+.access-create-user .admin-primary{display:flex;align-items:center;justify-content:center;gap:6px;width:auto;min-width:140px;margin:0}
+.access-users{padding:7px 12px 12px}
+.access-user{display:grid;grid-template-columns:minmax(90px,1fr) minmax(110px,.9fr) minmax(140px,1.2fr) auto auto;align-items:center;gap:7px;padding:9px 0;border-bottom:1px solid #232a34}
+.access-user:last-child{border-bottom:0}
+.access-user-name{display:grid;gap:4px}
+.access-user-name b{color:#e0e3e9;font-size:10px}
+.access-user-name small{color:#7b8592;font-size:8px}
+.access-user-save,.access-user-status{height:31px}
+.access-user-status.enabled{border-color:#3a4b41;color:#9ad5b2}
+.access-empty{display:flex;align-items:center;justify-content:center;gap:8px;min-height:100px;color:#7e8794;font-size:10px}
+.agent-layout{display:grid;grid-template-columns:minmax(280px,.8fr) minmax(400px,1.2fr);gap:12px;align-items:start}
+.agent-form{display:grid;gap:12px;padding:14px}
+.agent-form input{width:100%}
+.agent-form textarea{height:auto;min-height:110px;padding:9px;resize:vertical;font-family:inherit}
+.agent-format-hint{margin-top:-7px;color:#78818f;font-size:8px;line-height:1.45}
+.agent-active-check{display:flex!important}
+.agent-form-actions{display:flex;gap:8px}
+.agent-form-actions .admin-primary{display:flex;align-items:center;justify-content:center;gap:6px;width:auto;min-width:125px;margin:0}
+.access-cancel{min-height:39px}
+.agent-list{padding:0 12px}
+.agent-row{padding:13px 0;border-bottom:1px solid #252b35}
+.agent-row-main{display:flex;align-items:center;gap:9px}
+.agent-avatar{display:grid;place-items:center;width:30px;height:30px;border-radius:8px;background:#2c2844;color:#c1baff;font-size:12px;font-weight:700}
+.agent-row-main>div:nth-child(2){min-width:0;flex:1;display:grid;gap:4px}
+.agent-row-main b{overflow:hidden;color:#e4e6ec;font-size:10px;text-overflow:ellipsis}
+.agent-row-main small{overflow:hidden;color:#7c8592;font-size:8px;text-overflow:ellipsis}
+.agent-status{padding:3px 6px;border-radius:4px;background:#322427;color:#d99598;font-size:8px}
+.agent-status.on{background:#1b3328;color:#8bd5a8}
+.agent-meta{display:flex;gap:16px;margin:11px 0 8px;color:#828b98;font-size:9px}
+.agent-meta b{margin-left:4px;color:#c9ccd4;font-weight:600}
+.agent-members{display:flex;flex-wrap:wrap;gap:5px}
+.agent-members span{display:inline-flex;flex-wrap:wrap;gap:5px;padding:5px 7px;border:1px solid #29313d;border-radius:5px;color:#a9b0bb;font-size:8px}
+.agent-members code{color:#827cae}
+.agent-actions{display:flex;gap:6px;margin-top:10px}
+.agent-actions button{display:inline-flex;align-items:center;gap:5px;height:27px;padding:0 8px;border:1px solid #303744;border-radius:5px;background:#171c25;color:#aeb6c2;font-size:9px}
+.agent-actions button.danger{border-color:#443034;color:#df9da0}
+.commission-placeholder{display:grid;gap:5px;margin:12px;padding:11px;border:1px dashed #49402b;border-radius:7px;background:#211f18;color:#bcb08b;font-size:9px;line-height:1.5}
+.commission-placeholder b{color:#e0cd88}
+@media(max-width:1050px){.agent-layout{grid-template-columns:1fr}.access-create-user{grid-template-columns:1fr 1fr}.access-create-user .admin-primary{min-height:32px}}
+@media(max-width:700px){.access-roles{grid-template-columns:1fr}.access-user{grid-template-columns:1fr 1fr}.access-user-name{grid-column:span 2}.access-create-user{grid-template-columns:1fr}.access-panel>header{align-items:flex-start;flex-direction:column}.access-new-role{width:100%}.access-new-role input{flex:1}}
+.access-login-divider{margin:17px 0 12px;border-top:1px solid #292f3a;padding-top:13px;color:#7f8794;text-align:center;font-size:9px}
+.access-logout-link{width:100%;border:0;background:transparent;cursor:pointer}

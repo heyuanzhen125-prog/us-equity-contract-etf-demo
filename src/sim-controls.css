@@ -1,0 +1,90 @@
+.sim-market-controls{display:flex;align-items:center;gap:6px;margin:9px 0;padding:7px;border:1px solid #29313b;border-radius:6px;background:#121720}
+.sim-market-controls>span{flex:1;color:#87909d;font-size:8px}
+.sim-market-controls button{display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 7px;border:1px solid #334339;border-radius:5px;background:#18241f;color:#9addb7;font-size:8px}
+.sim-market-controls button:last-child{border-color:#493237;background:#261b20;color:#e5a0a4}
+.sim-point-editor{margin:9px 0;padding:8px;border:1px solid #2b3340;border-radius:6px;background:#111720}
+.sim-point-editor summary{cursor:pointer;color:#aeb8c7;font-size:9px}
+.sim-point-editor>p{margin:7px 0;color:#7f8997;font-size:8px}
+.sim-point-interval{display:flex;align-items:center;gap:8px;margin:8px 0;color:#aeb8c7;font-size:9px}
+.sim-point-interval input{width:64px;height:26px;padding:0 6px;border:1px solid #303744;border-radius:4px;background:#0d1219;color:#d9dfea;font-size:9px}
+.sim-point-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+.sim-point-grid label{display:grid;gap:3px;color:#7f8997;font-size:7px}
+.sim-point-grid input{width:100%;height:26px;padding:0 5px;border:1px solid #303744;border-radius:4px;background:#0d1219;color:#d9dfea;font-size:8px}
+.sim-point-save{display:inline-flex;align-items:center;gap:5px;height:28px;margin-top:8px;padding:0 8px;border:1px solid #394553;border-radius:5px;background:#1a222d;color:#c2ccda;font-size:8px}
+.sim-outcome-preview{display:grid;grid-template-columns:minmax(200px,.8fr) minmax(0,1.5fr);gap:12px;align-items:center;margin-top:14px;padding:14px;border:1px solid #49402b;border-radius:9px;background:#211f18}
+.sim-outcome-preview>div:first-child b{color:#e2d296;font-size:11px}
+.sim-outcome-preview p{margin:5px 0 0;color:#a89e7e;font-size:8px;line-height:1.55}
+.sim-preview-controls{display:flex;flex-wrap:wrap;gap:8px}
+.sim-preview-controls label{display:grid;flex:1;min-width:130px;gap:5px;color:#aca486;font-size:8px}
+.sim-preview-controls input,.sim-preview-controls select{height:30px;padding:0 8px;border:1px solid #484333;border-radius:5px;background:#171811;color:#e8e4d7;font:inherit;font-size:9px}
+.sim-preview-output{grid-column:2;padding:8px 9px;border-radius:5px;background:#29261b;color:#e3d398;font-size:9px}
+.sim-outcome-chart{margin-top:14px;padding:15px;border:1px solid #2a303b;border-radius:9px;background:#11151d}
+.sim-outcome-chart-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.sim-outcome-chart-head>div{display:grid;gap:4px}
+.sim-outcome-chart-head b{color:#e4e6ed;font-size:11px}
+.sim-outcome-chart-head span,.sim-outcome-chart>small{color:#7d8794;font-size:8px}
+.sim-outcome-chart-head strong{font-size:9px}
+.sim-outcome-chart-head strong.won{color:#83d9a8}
+.sim-outcome-chart-head strong.lost{color:#f18b8f}
+.sim-outcome-chart svg{display:block;width:100%;height:170px;margin:12px 0 5px}
+.sim-outcome-preview-result{display:flex;align-items:center;gap:6px;padding:9px;border-radius:5px;background:#1b201d;color:#a9d8b8;font-size:9px}
+.sim-outcome-empty{padding:10px;border:1px dashed #303744;border-radius:5px;color:#858e9c;text-align:center;font-size:9px}
+.outcome-control-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:14px}
+.outcome-control-card{min-width:0;padding:15px;border:1px solid #2a303b;border-radius:9px;background:#11151d}
+.outcome-control-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.outcome-control-card-head b{color:#e4e6ed;font-size:12px}
+.outcome-control-card-head p{margin:5px 0 0;color:#7f8997;font-size:9px;line-height:1.5}
+.outcome-control-card-head>span{padding:4px 7px;border-radius:5px;background:#1b201d;color:#a9d8b8;font-size:8px;white-space:nowrap}
+.outcome-policy{display:grid;gap:8px;margin:12px 0;padding:10px;border:1px solid #292f39;border-radius:6px;background:#0e1219}
+.outcome-policy>div:first-child{display:flex;justify-content:space-between;gap:8px;color:#858e9c;font-size:9px}
+.outcome-policy>div:first-child b{color:#d8dce4}
+.outcome-user-rules{display:flex;flex-wrap:wrap;gap:5px;align-items:center;color:#858e9c;font-size:8px}
+.outcome-user-rules span{margin-right:3px}
+.outcome-user-rules small{padding:3px 5px;border-radius:4px;background:#1b2030;color:#c5c9d4;font-size:8px}
+.outcome-form{display:flex;gap:8px;margin:10px 0}
+.outcome-form label{display:grid;flex:1;min-width:0;gap:5px;color:#9da6b4;font-size:9px}
+.outcome-form input,.outcome-form select{width:100%;height:32px;padding:0 8px;border:1px solid #303744;border-radius:5px;background:#0d1219;color:#d9dfea;font-size:9px}
+.outcome-actions{display:flex;flex-wrap:wrap;gap:7px}
+.outcome-actions button{height:30px;padding:0 10px;border:1px solid #394553;border-radius:5px;background:#1a222d;color:#c2ccda;font-size:9px}
+.outcome-actions .outcome-win{border-color:#355542;background:#18251e;color:#92d9aa}
+.outcome-actions .outcome-loss{border-color:#59383b;background:#281a1e;color:#ed9ca0}
+.outcome-actions button:disabled{opacity:.55;cursor:wait}
+.outcome-control-card>small{display:block;margin-top:10px;color:#77818e;font-size:8px;line-height:1.5}
+.admin-orders-panel{margin-top:16px;border:1px solid #252b35;border-radius:9px;background:#11151d;overflow:hidden}
+.admin-orders-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px;border-bottom:1px solid #252b35}
+.admin-orders-head>div:first-child{display:grid;gap:4px}
+.admin-orders-head h2{margin:0;color:#e4e6ed;font-size:12px}
+.admin-orders-head>div:first-child span{color:#7d8794;font-size:8px}
+.admin-orders-filters{display:flex;flex-wrap:wrap;gap:5px}
+.admin-orders-filters button{height:27px;padding:0 8px;border:1px solid #303744;border-radius:5px;background:#0e1219;color:#929ba9;font-size:8px}
+.admin-orders-filters button.active{border-color:#514b82;background:#211f35;color:#c5c0ff}
+.admin-orders-list{max-height:620px;overflow:auto}
+.admin-order-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border-bottom:1px solid #222832}
+.admin-order-row:last-child{border-bottom:0}
+.admin-order-summary{min-width:0;display:grid;gap:7px}
+.admin-order-title{display:flex;flex-wrap:wrap;align-items:center;gap:7px}
+.admin-order-title>b{color:#e2e5ec;font-size:9px}
+.admin-order-title>span{color:#aab2bf;font-size:9px}
+.admin-order-status{padding:3px 6px;border-radius:4px;font-size:8px;font-style:normal}
+.admin-order-status.pending{background:#332c1c;color:#e2c36d}
+.admin-order-status.won{background:#1c3428;color:#77d7a5}
+.admin-order-status.lost{background:#3a2225;color:#f18b8f}
+.admin-order-status.draw{background:#242b36;color:#aeb8c7}
+.admin-order-meta{display:flex;flex-wrap:wrap;gap:5px 12px;color:#737d8b;font-size:8px}
+.admin-order-actions{display:flex;flex:none;gap:6px}
+.admin-order-actions button{height:28px;padding:0 9px;border:1px solid #394553;border-radius:5px;background:#1a222d;color:#c2ccda;font-size:8px}
+.admin-order-actions .outcome-win{border-color:#355542;background:#18251e;color:#92d9aa}
+.admin-order-actions .outcome-loss{border-color:#59383b;background:#281a1e;color:#ed9ca0}
+.admin-order-actions button:disabled{opacity:.55;cursor:wait}
+.admin-orders-empty{padding:36px 16px;color:#7d8794;text-align:center;font-size:9px}
+.forecast-balance{display:flex;align-items:center;gap:6px;padding:6px 9px;border:1px solid #303744;border-radius:6px;color:#9da6b4;font-size:9px}
+.forecast-balance b{color:#a7ddb9}
+.forecast-stake{display:grid;gap:5px;margin:9px 0;color:#929ba9;font-size:9px}
+.forecast-stake input{height:30px;padding:0 8px;border:1px solid #303744;border-radius:5px;background:#10151d;color:#e3e6ee;font:inherit}
+.forecast-result{display:inline-flex;align-items:center;margin-left:6px;padding:3px 6px;border-radius:4px;font-size:8px}
+.forecast-result.pending{background:#332c1c;color:#e2c36d}
+.forecast-result.won{background:#1c3428;color:#77d7a5}
+.forecast-result.lost{background:#3a2225;color:#f18b8f}
+@media(max-width:700px){.sim-outcome-preview{grid-template-columns:1fr}.sim-preview-output{grid-column:1}.sim-market-controls{flex-wrap:wrap}.sim-market-controls>span{flex-basis:100%}.sim-point-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:800px){.outcome-control-grid{grid-template-columns:1fr}}
+@media(max-width:700px){.admin-orders-head{align-items:flex-start;flex-direction:column}.admin-order-row{align-items:flex-start;flex-direction:column}.admin-order-actions{width:100%}.admin-order-actions button{flex:1}}

@@ -1,5 +1,5 @@
 import express from 'express'
-import { randomUUID, timingSafeEqual } from 'node:crypto'
+import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
 
 const app = express()
 const submissions = new Map()
@@ -7,8 +7,39 @@ const walletTransactions = new Map()
 const walletBalances = new Map()
 const projects = new Map()
 const predictions = new Map()
+const contractSettlementTimers = new Map()
 const virtualBalances = new Map()
 const forecasts = new Map()
+const etfOrders = new Map()
+const etfBalances = new Map()
+const outcomePolicies = {
+  contracts: { all: null, users: new Map() },
+  forecasts: { all: null, users: new Map() },
+  etfOrders: { all: null, users: new Map() },
+}
+const staffUsers = new Map()
+const adminSessions = new Map()
+const agents = new Map()
+const permissionModules = [
+  { id: 'kyc', name: 'KYC 身份审核' },
+  { id: 'wallet', name: 'USDT 资金流水' },
+  { id: 'deposits', name: 'USDT / USDC 充值配置' },
+  { id: 'projects', name: '项目与曲线' },
+  { id: 'prediction-preview', name: '输赢结果控制' },
+  { id: 'front-config', name: '前台配置' },
+  { id: 'agents', name: '代理系统' },
+  { id: 'permissions', name: '权限与账号' },
+]
+const permissionModuleIds = permissionModules.map(item => item.id)
+const permissionRoles = new Map([
+  ['superadmin', { id: 'superadmin', name: '超级管理员', permissions: permissionModuleIds }],
+  ['operations', { id: 'operations', name: '运营管理员', permissions: ['projects', 'prediction-preview', 'front-config'] }],
+  ['compliance', { id: 'compliance', name: '审核员', permissions: ['kyc'] }],
+  ['finance', { id: 'finance', name: '财务人员', permissions: ['wallet', 'deposits'] }],
+  ['agent-manager', { id: 'agent-manager', name: '代理管理', permissions: ['agents'] }],
+])
+const depositCurrencies = ['USDT', 'USDC']
+const depositNetworks = ['TRC20', 'ERC20', 'Polygon']
 const frontendConfig = {
   marketAssets: [
     { symbol: 'NVDA', name: '英伟达', last: 142.87, change: 2.46, volume: '3.42B', type: '2× 多头', color: '#84d6b2', spark: [13,17,15,22,20,26,23,30,27,35,31,40,38,47] },
@@ -20,6 +51,15 @@ const frontendConfig = {
   marketIndices: [{s:'S&P 500',v:'6,812.34',c:'+0.74%'},{s:'纳斯达克',v:'23,104.61',c:'+1.12%'},{s:'道琼斯',v:'47,862.19',c:'+0.28%'},{s:'VIX',v:'18.42',c:'−2.16%',down:true}],
   siteName: 'Northstar Markets',
   marketSubtitle: '查看指数概况与后台发布的模拟项目。',
+  uiText: {
+    workspaceTitle: '工作区', navMarket: '市场概览', navEquity: '合约 ETF', navTime: '时间合约', navPrediction: '预测系统',
+    navWatchlist: '自选列表', navPositions: '持仓与订单', navKyc: '身份认证', marketNavTitle: '市场',
+    navNews: '市场资讯', navCalendar: '经济日历', riskTitle: '风险先行', riskText: '了解杠杆产品风险，理性管理仓位。',
+    riskAction: '查看风险说明', navHelp: '帮助中心', navSettings: '设置', tradingStatus: '美股盘中',
+    registerAction: '注册账户', depositAction: '充值 USDT / USDC', withdrawalAction: '提现 USDT', netWorthAction: '账户净值',
+    temperatureTitle: '市场温度', featuredAction: '进入合约市场', popularContracts: '热门合约', quickOrder: '快速下单',
+    buyAction: '买入', sellAction: '卖出', riskDisclosure: '风险披露',
+  },
   homeTitle: '市场概览',
   equityContractTitle: '合约 ETF',
   equityContractSubtitle: '浏览美股与杠杆 ETF 模拟行情，并使用虚拟账户体验下单。',
@@ -53,6 +93,10 @@ const frontendConfig = {
   showHelpNav: true,
   showSettingsNav: true,
   depositNetworks: ['TRC20', 'ERC20', 'Polygon'],
+  depositAssets: {
+    USDT: { minimumAmount: 10, instruction: '仅供演示，请勿向此页面提供真实资金。', networks: depositNetworks.map(network => ({ network, address: '', qrUrl: '' })) },
+    USDC: { minimumAmount: 10, instruction: '仅供演示，请勿向此页面提供真实资金。', networks: depositNetworks.map(network => ({ network, address: '', qrUrl: '' })) },
+  },
   minimumWithdrawal: 10,
   withdrawalFee: 0.5,
   contractDurations: [10, 30, 60],
@@ -78,13 +122,193 @@ if (process.env.NODE_ENV === 'production' && adminKey === 'local-demo-admin') {
 app.disable('x-powered-by')
 app.use(express.json({ limit: '32kb' }))
 
+app.post('/api/admin/login', (req, res) => {
+  const { masterKey, username, password } = req.body || {}
+  let session
+  if (typeof masterKey === 'string') {
+    const supplied = Buffer.from(masterKey)
+    const expected = Buffer.from(adminKey)
+    if (supplied.length === expected.length && timingSafeEqual(supplied, expected)) {
+      session = { roleId: 'superadmin', expiresAt: Date.now() + 12 * 60 * 60 * 1000 }
+    }
+  } else if (typeof username === 'string' && typeof password === 'string') {
+    const user = [...staffUsers.values()].find(item => item.username.toLowerCase() === username.trim().toLowerCase())
+    if (user?.active) {
+      const { hash } = hashPassword(password, user.passwordSalt)
+      const supplied = Buffer.from(hash, 'hex')
+      const expected = Buffer.from(user.passwordHash, 'hex')
+      if (supplied.length === expected.length && timingSafeEqual(supplied, expected)) {
+        session = { roleId: user.roleId, userId: user.id, expiresAt: Date.now() + 12 * 60 * 60 * 1000 }
+      }
+    }
+  }
+  if (!session) return res.status(401).json({ error: '后台账号或密码无效' })
+  const token = randomBytes(32).toString('hex')
+  adminSessions.set(token, session)
+  const user = session.userId ? staffUsers.get(session.userId) : null
+  res.json({
+    token,
+    role: permissionRoles.get(session.roleId),
+    user: user ? safeStaffUser(user) : null,
+    mustChangePassword: user?.mustChangePassword || false,
+  })
+})
+
+app.get('/api/admin/session', requireAdmin, (req, res) => {
+  const user = req.admin.userId ? staffUsers.get(req.admin.userId) : null
+  res.json({
+    role: permissionRoles.get(req.admin.roleId),
+    user: user ? safeStaffUser(user) : null,
+    mustChangePassword: req.admin.mustChangePassword || false,
+  })
+})
+
+app.post('/api/admin/logout', requireAdmin, (req, res) => {
+  if (req.admin.token) adminSessions.delete(req.admin.token)
+  res.json({ ok: true })
+})
+
+app.patch('/api/admin/change-password', requireAdmin, (req, res) => {
+  if (req.admin.root || !req.admin.userId) return res.status(400).json({ error: '仅后台人员账号需要修改密码' })
+  const user = staffUsers.get(req.admin.userId)
+  const { currentPassword, newPassword } = req.body || {}
+  if (!user || typeof currentPassword !== 'string') return res.status(400).json({ error: '当前密码无效' })
+  const { hash: currentHash } = hashPassword(currentPassword, user.passwordSalt)
+  const supplied = Buffer.from(currentHash, 'hex')
+  const expected = Buffer.from(user.passwordHash, 'hex')
+  if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return res.status(401).json({ error: '当前密码不正确' })
+  if (!validPassword(newPassword)) return res.status(400).json({ error: '新密码需为 12–128 个字符' })
+  const credential = hashPassword(newPassword)
+  user.passwordSalt = credential.salt
+  user.passwordHash = credential.hash
+  user.mustChangePassword = false
+  res.json({ ok: true })
+})
+
+app.get('/api/admin/permissions', requirePermission('permissions'), (_req, res) => {
+  res.json({
+    modules: permissionModules,
+    roles: [...permissionRoles.values()],
+    users: [...staffUsers.values()].map(safeStaffUser),
+  })
+})
+
+app.put('/api/admin/permissions', requirePermission('permissions'), (req, res) => {
+  const roles = req.body?.roles
+  if (!Array.isArray(roles) || roles.length > 30) return res.status(400).json({ error: '角色列表无效（最多 30 个）' })
+  const normalized = []
+  for (const [index, role] of roles.entries()) {
+    if (!role || typeof role.id !== 'string' || !/^[a-z][a-z0-9-]{1,39}$/.test(role.id) || role.id === 'superadmin' ||
+      typeof role.name !== 'string' || !role.name.trim() || role.name.length > 40 ||
+      !Array.isArray(role.permissions) || role.permissions.some(id => !permissionModuleIds.includes(id)) ||
+      new Set(role.permissions).size !== role.permissions.length) {
+      return res.status(400).json({ error: `第 ${index + 1} 个角色信息无效` })
+    }
+    if (normalized.some(item => item.id === role.id)) return res.status(400).json({ error: '角色标识不能重复' })
+    normalized.push({ id: role.id, name: role.name.trim(), permissions: role.permissions })
+  }
+  const nextIds = new Set(normalized.map(role => role.id))
+  const assignedRole = [...staffUsers.values()].find(user => !nextIds.has(user.roleId))
+  if (assignedRole) return res.status(409).json({ error: `角色仍分配给后台账号 ${assignedRole.username}，请先调整账号角色` })
+  for (const id of permissionRoles.keys()) if (id !== 'superadmin' && !nextIds.has(id)) permissionRoles.delete(id)
+  for (const role of normalized) permissionRoles.set(role.id, role)
+  res.json({ roles: [...permissionRoles.values()] })
+})
+
+app.post('/api/admin/staff-users', requirePermission('permissions'), (req, res) => {
+  const { username, password, roleId } = req.body || {}
+  const normalizedUsername = typeof username === 'string' ? username.trim() : ''
+  if (!/^[a-zA-Z0-9._-]{3,32}$/.test(normalizedUsername)) return res.status(400).json({ error: '账号需为 3–32 位字母、数字、点、下划线或连字符' })
+  if (!validPassword(password)) return res.status(400).json({ error: '初始密码需为 12–128 个字符' })
+  if (typeof roleId !== 'string' || roleId === 'superadmin' || !permissionRoles.has(roleId)) return res.status(400).json({ error: '请选择有效的后台角色' })
+  if ([...staffUsers.values()].some(user => user.username.toLowerCase() === normalizedUsername.toLowerCase())) return res.status(409).json({ error: '该后台账号已存在' })
+  const credential = hashPassword(password)
+  const user = { id: randomUUID(), username: normalizedUsername, roleId, active: true, mustChangePassword: true, passwordSalt: credential.salt, passwordHash: credential.hash, createdAt: new Date().toISOString() }
+  staffUsers.set(user.id, user)
+  res.status(201).json({ user: safeStaffUser(user) })
+})
+
+app.patch('/api/admin/staff-users/:id', requirePermission('permissions'), (req, res) => {
+  const user = staffUsers.get(req.params.id)
+  if (!user) return res.status(404).json({ error: '未找到后台账号' })
+  const { roleId, active, password } = req.body || {}
+  if (roleId !== undefined) {
+    if (typeof roleId !== 'string' || roleId === 'superadmin' || !permissionRoles.has(roleId)) return res.status(400).json({ error: '请选择有效的后台角色' })
+    user.roleId = roleId
+  }
+  if (active !== undefined) {
+    if (typeof active !== 'boolean') return res.status(400).json({ error: '账号状态无效' })
+    user.active = active
+    if (!active) for (const [token, session] of adminSessions) if (session.userId === user.id) adminSessions.delete(token)
+  }
+  if (password !== undefined) {
+    if (!validPassword(password)) return res.status(400).json({ error: '初始密码需为 12–128 个字符' })
+    const credential = hashPassword(password)
+    user.passwordSalt = credential.salt
+    user.passwordHash = credential.hash
+    user.mustChangePassword = true
+    for (const [token, session] of adminSessions) if (session.userId === user.id) adminSessions.delete(token)
+  }
+  res.json({ user: safeStaffUser(user) })
+})
+
 function requireAdmin(req, res, next) {
-  const supplied = Buffer.from(req.get('x-admin-key') || '')
+  const suppliedText = req.get('x-admin-key') || ''
+  const supplied = Buffer.from(suppliedText)
   const expected = Buffer.from(adminKey)
-  if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
-    return res.status(401).json({ error: '后台密钥无效' })
+  if (supplied.length === expected.length && timingSafeEqual(supplied, expected)) {
+    req.admin = { roleId: 'superadmin', root: true, token: '' }
+    return next()
+  }
+  const session = adminSessions.get(suppliedText)
+  if (!session || session.expiresAt <= Date.now()) {
+    adminSessions.delete(suppliedText)
+    return res.status(401).json({ error: '后台登录已失效，请重新登录' })
+  }
+  if (session.roleId !== 'superadmin') {
+    const user = staffUsers.get(session.userId)
+    if (!user || !user.active) {
+      adminSessions.delete(suppliedText)
+      return res.status(401).json({ error: '后台账号已停用，请联系超级管理员' })
+    }
+    session.roleId = user.roleId
+    req.admin = { roleId: user.roleId, root: false, token: suppliedText, userId: user.id, mustChangePassword: user.mustChangePassword }
+  } else {
+    req.admin = { roleId: 'superadmin', root: true, token: suppliedText, mustChangePassword: false }
   }
   next()
+}
+
+function requirePermission(permission) {
+  return (req, res, next) => {
+    requireAdmin(req, res, error => {
+      if (error) return next(error)
+      if (req.admin.mustChangePassword && !req.path.endsWith('/change-password')) {
+        return res.status(403).json({ error: '首次登录请先修改临时密码' })
+      }
+      const role = permissionRoles.get(req.admin.roleId)
+      if (!role || !role.permissions.includes(permission)) {
+        return res.status(403).json({ error: '当前后台角色没有此栏目权限' })
+      }
+      next()
+    })
+  }
+}
+
+function safeStaffUser(user) {
+  return { id: user.id, username: user.username, roleId: user.roleId, active: user.active, mustChangePassword: user.mustChangePassword, createdAt: user.createdAt }
+}
+
+function hashPassword(password, salt = randomBytes(16).toString('hex')) {
+  return { salt, hash: scryptSync(password, salt, 64).toString('hex') }
+}
+
+function validPassword(password) {
+  return typeof password === 'string' && password.length >= 12 && password.length <= 128
+}
+
+function publicAgent(agent) {
+  return { id: agent.id, code: agent.code, name: agent.name, contact: agent.contact, commissionRate: agent.commissionRate, members: agent.members, active: agent.active, createdAt: agent.createdAt }
 }
 
 function safeSubmission(item) {
@@ -109,9 +333,10 @@ const validPersonalId = value => typeof value === 'string' && /^NST-[A-Z0-9]{8}$
 const latestKyc = personalId => [...submissions.values()].filter(row => row.personalId === personalId).sort((a, b) => b.submittedAt.localeCompare(a.submittedAt))[0]
 const rounded = value => Math.round(value * 100) / 100
 const addressMask = address => address.length < 12 ? '••••' : `${address.slice(0, 6)}••••${address.slice(-5)}`
+const walletBalanceKey = (personalId, currency = 'USDT') => `${personalId}:${currency}`
 function safeTransaction(item) {
   return {
-    id: item.id, personalId: item.personalId, type: item.type, amount: item.amount, fee: item.fee,
+    id: item.id, personalId: item.personalId, type: item.type, currency: item.currency || 'USDT', amount: item.amount, fee: item.fee,
     network: item.network, addressMasked: item.address ? addressMask(item.address) : '',
     status: item.status, reason: item.reason, createdAt: item.createdAt, reviewedAt: item.reviewedAt,
   }
@@ -144,7 +369,21 @@ function buildCurve(startPrice, targetChangePct, seed = 0) {
 }
 
 function publicProject(project) {
-  return { id: project.id, symbol: project.symbol, name: project.name, startPrice: project.startPrice, lastPrice: project.curve.at(-1), targetChangePct: project.targetChangePct, curve: project.curve, simulated: true, updatedAt: project.updatedAt }
+  const marketPoints = project.marketCurve || project.curve
+  const intervalSeconds = project.marketPointIntervalSeconds || 5
+  const elapsedSteps = Math.max(0, (Date.now() - (project.marketStartedAt || Date.now())) / (intervalSeconds * 1000))
+  const currentIndex = Math.min(Math.floor(elapsedSteps), marketPoints.length - 1)
+  const nextIndex = Math.min(currentIndex + 1, marketPoints.length - 1)
+  const progress = currentIndex === nextIndex ? 0 : elapsedSteps - currentIndex
+  const lastPrice = rounded(marketPoints[currentIndex] + (marketPoints[nextIndex] - marketPoints[currentIndex]) * progress)
+  const curve = marketPoints.map((point, index) => index <= currentIndex ? point : lastPrice)
+  if (currentIndex < marketPoints.length - 1) curve[currentIndex + 1] = lastPrice
+  else curve[currentIndex] = lastPrice
+  return { id: project.id, symbol: project.symbol, name: project.name, startPrice: project.startPrice, lastPrice, targetChangePct: rounded((lastPrice / project.startPrice - 1) * 100), curve, simulated: true, visible: project.visible, sortOrder: project.sortOrder, updatedAt: project.updatedAt }
+}
+
+function adminProject(project) {
+  return { ...publicProject(project), marketPoints: project.marketCurve || project.curve, marketPointIntervalSeconds: project.marketPointIntervalSeconds || 5, previewPoints: project.previewPoints || project.curve }
 }
 
 function publicPrediction(item) {
@@ -155,6 +394,18 @@ function publicPrediction(item) {
     exitPrice: item.status === 'pending' ? null : item.exitPrice, payout: item.status === 'pending' ? null : item.payout,
     profit: item.status === 'pending' ? null : item.profit, createdAt: item.createdAt, settledAt: item.settledAt,
   }
+}
+
+function settleContract(item, result) {
+  const previousPayout = item.payout || 0
+  const payout = result === 'won' ? rounded(item.stake * (1 + item.payoutPercent / 100)) : 0
+  item.status = result
+  item.result = result
+  item.exitPrice = item.targetPrice
+  item.payout = payout
+  item.profit = rounded(payout - item.stake)
+  item.settledAt = new Date().toISOString()
+  virtualBalances.set(item.personalId, rounded((virtualBalances.get(item.personalId) ?? 10000) + payout - previousPayout))
 }
 
 function timePayoutPercent(direction, projectId) {
@@ -172,6 +423,34 @@ function timePayoutPercent(direction, projectId) {
   return Math.round(Math.min(frontendConfig.payoutMaxPercent, Math.max(frontendConfig.payoutMinPercent, adjusted)))
 }
 
+function getOutcomePolicy(kind, personalId) {
+  return outcomePolicies[kind].users.get(personalId) || outcomePolicies[kind].all
+}
+
+function settleForecast(item, result) {
+  const previousPayout = item.payout || 0
+  const payout = result === 'won' ? rounded(item.stake * (1 + item.rewardPercent / 100)) : 0
+  item.status = result
+  item.result = result
+  item.payout = payout
+  item.profit = rounded(payout - item.stake)
+  item.settledAt = new Date().toISOString()
+  virtualBalances.set(item.personalId, rounded((virtualBalances.get(item.personalId) ?? 10000) + payout - previousPayout))
+  return true
+}
+
+function settleEtfOrder(item, result) {
+  const previousPayout = item.payout || 0
+  const payout = result === 'won' ? rounded(item.amount * (1 + item.payoutPercent / 100)) : 0
+  item.status = result
+  item.result = result
+  item.payout = payout
+  item.profit = rounded(payout - item.amount)
+  item.settledAt = new Date().toISOString()
+  etfBalances.set(item.personalId, rounded((etfBalances.get(item.personalId) ?? 25000) + payout - previousPayout))
+  return true
+}
+
 function validProjectInput({ symbol, name, startPrice, targetChangePct }) {
   return typeof symbol === 'string' && /^SIM-[A-Z0-9]{2,8}$/.test(symbol)
     && typeof name === 'string' && name.trim().length >= 2 && name.trim().length <= 60
@@ -182,14 +461,19 @@ function validProjectInput({ symbol, name, startPrice, targetChangePct }) {
 app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'northstar-local-api' }))
 app.get('/api/public-config', (_req, res) => res.json({ config: frontendConfig, forecastEvents }))
 app.get('/api/forecast-events', (_req, res) => res.json({ events: forecastEvents }))
-app.get('/api/admin/front-config', requireAdmin, (_req, res) => res.json({ config: frontendConfig, forecastEvents }))
-app.patch('/api/admin/front-config', requireAdmin, (req, res) => {
+app.get('/api/admin/front-config', requirePermission('front-config'), (_req, res) => res.json({ config: frontendConfig, forecastEvents }))
+app.patch('/api/admin/front-config', requirePermission('front-config'), (req, res) => {
   const input = req.body || {}
   const textFields = ['siteName', 'marketSubtitle', 'homeTitle', 'equityContractTitle', 'equityContractSubtitle', 'timeContractTitle', 'timeContractSubtitle', 'predictionTitle', 'predictionSubtitle', 'indexTitle', 'indexSubtitle', 'featuredTitle', 'featuredSubtitle', 'demoProjectTitle', 'demoProjectSubtitle', 'orderDisclaimer']
   for (const field of textFields) {
     if (typeof input[field] !== 'string' || !input[field].trim() || input[field].length > (field === 'siteName' ? 40 : field === 'orderDisclaimer' ? 180 : 140)) return res.status(400).json({ error: `${field} 内容无效` })
     frontendConfig[field] = input[field].trim()
   }
+  const uiTextKeys = Object.keys(frontendConfig.uiText)
+  if (!input.uiText || typeof input.uiText !== 'object' || Array.isArray(input.uiText) || uiTextKeys.some(key => typeof input.uiText[key] !== 'string' || input.uiText[key].length > 120)) {
+    return res.status(400).json({ error: '前台导航和按钮文案无效；每项最多 120 字' })
+  }
+  frontendConfig.uiText = Object.fromEntries(uiTextKeys.map(key => [key, input.uiText[key].trim()]))
   if (!Array.isArray(input.marketAssets) || input.marketAssets.length < 1 || input.marketAssets.length > 40) return res.status(400).json({ error: 'ETF 列表需要 1–40 个标的' })
   const assetSymbols = new Set()
   for (const asset of input.marketAssets) {
@@ -224,7 +508,46 @@ app.patch('/api/admin/front-config', requireAdmin, (req, res) => {
   frontendConfig.contractDurations = [...new Set(input.contractDurations.map(Number))].sort((a, b) => a - b)
   res.json({ config: frontendConfig })
 })
-app.put('/api/admin/forecast-events', requireAdmin, (req, res) => {
+app.get('/api/admin/deposit-config', requirePermission('deposits'), (_req, res) => {
+  res.json({ currencies: frontendConfig.depositAssets })
+})
+app.patch('/api/admin/deposit-config', requirePermission('deposits'), (req, res) => {
+  const input = req.body?.currencies
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return res.status(400).json({ error: '充值币种配置格式无效' })
+  const normalized = {}
+  for (const currency of depositCurrencies) {
+    const item = input[currency]
+    const minimumAmount = Number(item?.minimumAmount)
+    if (!Number.isFinite(minimumAmount) || minimumAmount < 0.01 || minimumAmount > 100000) {
+      return res.status(400).json({ error: `${currency} 最低充值金额需为 0.01–100000` })
+    }
+    if (typeof item.instruction !== 'string' || item.instruction.length > 280) {
+      return res.status(400).json({ error: `${currency} 充值说明最多 280 字` })
+    }
+    if (!Array.isArray(item.networks) || !item.networks.length) {
+      return res.status(400).json({ error: `${currency} 至少需要启用一个网络` })
+    }
+    const seenNetworks = new Set()
+    const networks = []
+    for (const network of item.networks) {
+      if (!depositNetworks.includes(network?.network) || seenNetworks.has(network.network)) {
+        return res.status(400).json({ error: `${currency} 网络无效或重复` })
+      }
+      if (typeof network.address !== 'string' || network.address.length > 160) {
+        return res.status(400).json({ error: `${currency} ${network.network} 演示地址最多 160 字` })
+      }
+      if (typeof network.qrUrl !== 'string' || network.qrUrl.length > 2048 || (network.qrUrl && !/^https:\/\//i.test(network.qrUrl))) {
+        return res.status(400).json({ error: `${currency} ${network.network} 二维码链接必须为空或 HTTPS 地址` })
+      }
+      seenNetworks.add(network.network)
+      networks.push({ network: network.network, address: network.address.trim(), qrUrl: network.qrUrl.trim() })
+    }
+    normalized[currency] = { minimumAmount: rounded(minimumAmount), instruction: item.instruction.trim(), networks }
+  }
+  frontendConfig.depositAssets = normalized
+  res.json({ currencies: frontendConfig.depositAssets })
+})
+app.put('/api/admin/forecast-events', requirePermission('front-config'), (req, res) => {
   const events = req.body?.events
   if (!Array.isArray(events) || events.length > 40) return res.status(400).json({ error: '预测事件列表格式无效（最多 40 条）' })
   const normalized = []
@@ -240,36 +563,241 @@ app.put('/api/admin/forecast-events', requireAdmin, (req, res) => {
 })
 
 app.get('/api/projects', (_req, res) => {
-  res.json({ projects: [...projects.values()].map(publicProject) })
+  res.json({ projects: [...projects.values()].filter(project => project.visible).sort((a, b) => a.sortOrder - b.sortOrder).map(publicProject) })
 })
 
-app.get('/api/admin/projects', requireAdmin, (_req, res) => {
-  res.json({ projects: [...projects.values()].map(publicProject) })
+app.get('/api/admin/projects', requirePermission('projects'), (_req, res) => {
+  res.json({ projects: [...projects.values()].sort((a, b) => a.sortOrder - b.sortOrder).map(adminProject) })
 })
 
-app.post('/api/admin/projects', requireAdmin, (req, res) => {
+app.get('/api/admin/outcome-controls', requirePermission('prediction-preview'), (_req, res) => {
+  const serialize = policy => ({ all: policy.all, users: Object.fromEntries(policy.users) })
+  res.json({
+    policies: { contracts: serialize(outcomePolicies.contracts), forecasts: serialize(outcomePolicies.forecasts), etfOrders: serialize(outcomePolicies.etfOrders) },
+    pendingContracts: [...predictions.values()].filter(item => item.status === 'pending').length,
+    pendingForecasts: [...forecasts.values()].filter(item => item.status === 'pending').length,
+    pendingEtfOrders: [...etfOrders.values()].filter(item => item.status === 'pending').length,
+  })
+})
+
+app.put('/api/admin/outcome-controls/:kind', requirePermission('prediction-preview'), (req, res) => {
+  const { kind } = req.params
+  if (!['contracts', 'forecasts', 'etfOrders'].includes(kind)) return res.status(404).json({ error: '输赢控制类型无效' })
+  const { target, result } = req.body || {}
+  if ((result !== null && !['won', 'lost'].includes(result)) || (target !== 'all' && !validPersonalId(target))) {
+    return res.status(400).json({ error: '请选择全体或有效个人 ID，并选择赢、输或清除规则' })
+  }
+
+  const policy = outcomePolicies[kind]
+  if (target === 'all') {
+    policy.all = result
+    policy.users.clear()
+  } else if (result === null) {
+    policy.users.delete(target)
+  } else {
+    policy.users.set(target, result)
+  }
+
+  let affected = 0
+  if (kind === 'contracts') {
+    for (const item of predictions.values()) {
+      if (item.status !== 'pending' || (target !== 'all' && item.personalId !== target)) continue
+      item.forcedResult = getOutcomePolicy(kind, item.personalId) || null
+      affected += 1
+    }
+  } else if (kind === 'forecasts' && result !== null) {
+    for (const item of forecasts.values()) {
+      if (item.status !== 'pending' || (target !== 'all' && item.personalId !== target)) continue
+      const forcedResult = getOutcomePolicy(kind, item.personalId)
+      if (forcedResult && settleForecast(item, forcedResult)) affected += 1
+    }
+  } else if (kind === 'etfOrders' && result !== null) {
+    for (const item of etfOrders.values()) {
+      if (item.status !== 'pending' || (target !== 'all' && item.personalId !== target)) continue
+      const forcedResult = getOutcomePolicy(kind, item.personalId)
+      if (forcedResult && settleEtfOrder(item, forcedResult)) affected += 1
+    }
+  }
+
+  const serialize = current => ({ all: current.all, users: Object.fromEntries(current.users) })
+  res.json({
+    ok: true,
+    affected,
+    policies: { contracts: serialize(outcomePolicies.contracts), forecasts: serialize(outcomePolicies.forecasts), etfOrders: serialize(outcomePolicies.etfOrders) },
+    pendingContracts: [...predictions.values()].filter(item => item.status === 'pending').length,
+    pendingForecasts: [...forecasts.values()].filter(item => item.status === 'pending').length,
+    pendingEtfOrders: [...etfOrders.values()].filter(item => item.status === 'pending').length,
+  })
+})
+
+app.get('/api/admin/orders', requirePermission('prediction-preview'), (_req, res) => {
+  const contracts = [...predictions.values()].map(item => ({
+    id: item.id, kind: 'contracts', personalId: item.personalId, symbol: item.projectSymbol,
+    direction: item.direction, durationSeconds: item.durationSeconds, stake: item.stake,
+    payoutPercent: item.payoutPercent, status: item.status, result: item.result,
+    profit: item.profit, createdAt: item.createdAt,
+  }))
+  const forecastOrders = [...forecasts.values()].map(item => {
+    const event = forecastEvents.find(candidate => candidate.id === item.eventId)
+    return {
+      id: item.id, kind: 'forecasts', personalId: item.personalId, symbol: event?.question || item.eventId,
+      probability: item.probability, stake: item.stake, payoutPercent: item.rewardPercent,
+      status: item.status, result: item.result, profit: item.profit, createdAt: item.updatedAt,
+    }
+  })
+  const equityOrders = [...etfOrders.values()].map(item => ({
+    id: item.id, kind: 'etfOrders', personalId: item.personalId, symbol: item.symbol,
+    direction: item.side, quantity: item.quantity, stake: item.amount, payoutPercent: item.payoutPercent,
+    status: item.status, result: item.result, profit: item.profit, createdAt: item.createdAt,
+  }))
+  const orders = [...contracts, ...forecastOrders, ...equityOrders]
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, 300)
+  res.json({ orders })
+})
+
+app.patch('/api/admin/orders/:kind/:id/result', requirePermission('prediction-preview'), (req, res) => {
+  const { kind, id } = req.params
+  const { result } = req.body || {}
+  if (!['contracts', 'forecasts', 'etfOrders'].includes(kind)) return res.status(404).json({ error: '订单类型无效' })
+  if (!['won', 'lost'].includes(result)) return res.status(400).json({ error: '订单结果必须为赢或输' })
+
+  let order
+  if (kind === 'contracts') order = predictions.get(id)
+  else if (kind === 'etfOrders') order = etfOrders.get(id)
+  else order = [...forecasts.values()].find(item => item.id === id)
+  if (!order) return res.status(404).json({ error: '未找到该模拟订单' })
+
+  if (kind === 'contracts') {
+    const timer = contractSettlementTimers.get(id)
+    if (timer) clearTimeout(timer)
+    contractSettlementTimers.delete(id)
+    settleContract(order, result)
+  }
+  else if (kind === 'forecasts') settleForecast(order, result)
+  else settleEtfOrder(order, result)
+  res.json({ ok: true, order })
+})
+
+app.post('/api/admin/projects', requirePermission('projects'), (req, res) => {
   const values = req.body || {}
   if (!validProjectInput(values)) return res.status(400).json({ error: '项目代码须为 SIM- 前缀，价格须大于 0，模拟曲线变化限制在 ±20%' })
   const symbol = values.symbol.trim().toUpperCase()
   if ([...projects.values()].some(project => project.symbol === symbol)) return res.status(409).json({ error: '该模拟项目代码已存在' })
   const startPrice = rounded(Number(values.startPrice))
   const targetChangePct = Number(values.targetChangePct)
-  const project = { id: randomUUID(), symbol, name: values.name.trim(), startPrice, targetChangePct, curve: buildCurve(startPrice, targetChangePct, projects.size), updatedAt: new Date().toISOString() }
+  const curve = buildCurve(startPrice, targetChangePct, projects.size)
+  const project = { id: randomUUID(), symbol, name: values.name.trim(), startPrice, targetChangePct, curve, marketCurve: curve, marketStartedAt: Date.now(), marketPointIntervalSeconds: 5, previewPoints: curve, visible: true, sortOrder: projects.size, updatedAt: new Date().toISOString() }
   projects.set(project.id, project)
   res.status(201).json({ project: publicProject(project) })
 })
 
-app.patch('/api/admin/projects/:id', requireAdmin, (req, res) => {
+app.patch('/api/admin/projects/:id', requirePermission('projects'), (req, res) => {
   const project = projects.get(req.params.id)
   if (!project) return res.status(404).json({ error: '未找到演示项目' })
-  const { startPrice = project.startPrice, targetChangePct = project.targetChangePct, name = project.name } = req.body || {}
-  if (!validProjectInput({ symbol: project.symbol, name, startPrice, targetChangePct })) return res.status(400).json({ error: '模拟价格或曲线变化无效（变化范围 ±20%）' })
+  const { startPrice = project.startPrice, targetChangePct = project.targetChangePct, name = project.name, symbol = project.symbol, visible = project.visible, sortOrder = project.sortOrder } = req.body || {}
+  if (!validProjectInput({ symbol, name, startPrice, targetChangePct }) || typeof visible !== 'boolean' || !Number.isInteger(Number(sortOrder)) || Number(sortOrder) < 0 || Number(sortOrder) > 999) return res.status(400).json({ error: '项目信息无效：检查 SIM 代码、名称、价格、显示状态和排序（0–999）' })
+  const normalizedSymbol = symbol.trim().toUpperCase()
+  if ([...projects.values()].some(item => item.id !== project.id && item.symbol === normalizedSymbol)) return res.status(409).json({ error: '该模拟项目代码已存在' })
+  project.symbol = normalizedSymbol
   project.name = name.trim()
+  const startPriceChanged = Number(startPrice) !== project.startPrice
   project.startPrice = rounded(Number(startPrice))
   project.targetChangePct = Number(targetChangePct)
-  project.curve = buildCurve(project.startPrice, project.targetChangePct, projects.size + Date.now() % 11)
+  project.visible = visible
+  project.sortOrder = Number(sortOrder)
+  if (startPriceChanged) {
+    project.marketCurve = buildCurve(project.startPrice, project.targetChangePct, projects.size + Date.now() % 11)
+    project.marketStartedAt = Date.now()
+  }
   project.updatedAt = new Date().toISOString()
   res.json({ project: publicProject(project) })
+})
+
+app.delete('/api/admin/projects/:id', requirePermission('projects'), (req, res) => {
+  if (!projects.has(req.params.id)) return res.status(404).json({ error: '未找到演示项目' })
+  projects.delete(req.params.id)
+  res.json({ ok: true })
+})
+
+app.patch('/api/admin/projects/:id/preview-points', requirePermission('projects'), (req, res) => {
+  const project = projects.get(req.params.id)
+  if (!project) return res.status(404).json({ error: '未找到演示项目' })
+  const points = req.body?.points
+  const minimum = project.startPrice * 0.8
+  const maximum = project.startPrice * 1.2
+  if (!Array.isArray(points) || points.length !== 20 || points.some(point => !Number.isFinite(Number(point)) || Number(point) < minimum || Number(point) > maximum)) {
+    return res.status(400).json({ error: `点位必须为 20 个数值，且每个点需在起始价的 ±20% 范围内（${rounded(minimum)}–${rounded(maximum)}）` })
+  }
+  project.previewPoints = points.map(value => rounded(Number(value)))
+  project.updatedAt = new Date().toISOString()
+  res.json({ project: adminProject(project) })
+})
+
+app.patch('/api/admin/projects/:id/market-points', requirePermission('projects'), (req, res) => {
+  const project = projects.get(req.params.id)
+  if (!project) return res.status(404).json({ error: '未找到演示项目' })
+  const points = req.body?.points
+  const intervalSeconds = Number(req.body?.intervalSeconds ?? 5)
+  const minimum = project.startPrice * 0.8
+  const maximum = project.startPrice * 1.2
+  if (!Array.isArray(points) || points.length !== 20 || points.some(point => !Number.isFinite(Number(point)) || Number(point) < minimum || Number(point) > maximum) || !Number.isInteger(intervalSeconds) || intervalSeconds < 1 || intervalSeconds > 60) {
+    return res.status(400).json({ error: `须填写 20 个有效点位（起始价 ±20% 范围）及 1–60 秒的点位间隔` })
+  }
+  project.marketCurve = points.map(value => rounded(Number(value)))
+  project.marketPointIntervalSeconds = intervalSeconds
+  project.marketStartedAt = Date.now()
+  project.updatedAt = new Date().toISOString()
+  res.json({ project: adminProject(project) })
+})
+
+function normalizeAgentInput(input, existingAgentId = '') {
+  const { code, name, contact = '', commissionRate, members = [], active = true } = input || {}
+  const normalizedCode = typeof code === 'string' ? code.trim().toUpperCase() : ''
+  const rate = Number(commissionRate)
+  if (!/^AG-[A-Z0-9-]{2,24}$/.test(normalizedCode) || typeof name !== 'string' || !name.trim() || name.length > 80 ||
+    typeof contact !== 'string' || contact.length > 120 || !Number.isFinite(rate) || rate < 0 || rate > 100 ||
+    !Array.isArray(members) || members.length > 500 || typeof active !== 'boolean') return null
+  const normalizedMembers = []
+  for (const member of members) {
+    if (!member || !validPersonalId(member.personalId) || typeof member.name !== 'string' || member.name.trim().length > 80) return null
+    normalizedMembers.push({ personalId: member.personalId, name: member.name.trim() || member.personalId })
+  }
+  if (new Set(normalizedMembers.map(member => member.personalId)).size !== normalizedMembers.length) return null
+  const duplicateCode = [...agents.values()].some(agent => agent.id !== existingAgentId && agent.code === normalizedCode)
+  const assignedElsewhere = [...agents.values()].some(agent => agent.id !== existingAgentId && agent.members.some(member => normalizedMembers.some(next => next.personalId === member.personalId)))
+  if (duplicateCode || assignedElsewhere) return null
+  return { code: normalizedCode, name: name.trim(), contact: contact.trim(), commissionRate: rounded(rate), members: normalizedMembers, active }
+}
+
+app.get('/api/admin/agents', requirePermission('agents'), (_req, res) => {
+  res.json({
+    agents: [...agents.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map(publicAgent),
+    commissionStatus: { enabled: false, note: '尚未接入真实入金数据源；返佣比例仅为配置，当前不会自动计算或结算佣金。' },
+  })
+})
+
+app.post('/api/admin/agents', requirePermission('agents'), (req, res) => {
+  const values = normalizeAgentInput(req.body)
+  if (!values) return res.status(400).json({ error: '代理资料无效；请检查 AG- 编号、返佣比例、下级个人 ID，且确保编号和下级未重复' })
+  const agent = { id: randomUUID(), ...values, createdAt: new Date().toISOString() }
+  agents.set(agent.id, agent)
+  res.status(201).json({ agent: publicAgent(agent) })
+})
+
+app.patch('/api/admin/agents/:id', requirePermission('agents'), (req, res) => {
+  const agent = agents.get(req.params.id)
+  if (!agent) return res.status(404).json({ error: '未找到代理' })
+  const values = normalizeAgentInput({ ...agent, ...req.body }, agent.id)
+  if (!values) return res.status(400).json({ error: '代理资料无效；请检查 AG- 编号、返佣比例、下级个人 ID，且确保编号和下级未重复' })
+  Object.assign(agent, values)
+  res.json({ agent: publicAgent(agent) })
+})
+
+app.delete('/api/admin/agents/:id', requirePermission('agents'), (req, res) => {
+  if (!agents.has(req.params.id)) return res.status(404).json({ error: '未找到代理' })
+  agents.delete(req.params.id)
+  res.json({ ok: true })
 })
 
 app.get('/api/time-contracts/quote', (req, res) => {
@@ -292,19 +820,80 @@ app.get('/api/forecasts', (req, res) => {
   const personalId = String(req.query.personalId || '')
   if (!validPersonalId(personalId)) return res.status(400).json({ error: '请先注册并绑定个人 ID' })
   const items = [...forecasts.values()].filter(item => item.personalId === personalId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-  res.json({ personalId, forecasts: items.slice(0, 50) })
+  res.json({ personalId, balance: virtualBalances.get(personalId) ?? 10000, forecasts: items.slice(0, 50) })
 })
 
 app.post('/api/forecasts', (req, res) => {
   if (!frontendConfig.showPrediction) return res.status(403).json({ error: '后台已关闭预测系统' })
   const { personalId, eventId, probability, rationale = '' } = req.body || {}
+  const stake = Number(req.body?.stake)
   if (!validPersonalId(personalId)) return res.status(400).json({ error: '请先注册并绑定个人 ID' })
   if (typeof eventId !== 'string' || !/^EVT-[A-Z0-9-]{3,30}$/.test(eventId)) return res.status(400).json({ error: '预测事件无效' })
+  const event = forecastEvents.find(item => item.id === eventId)
+  if (!event) return res.status(404).json({ error: '未找到该模拟预测事件' })
   const value = Number(probability)
-  if (!Number.isInteger(value) || value < 1 || value > 99 || typeof rationale !== 'string' || rationale.length > 280) return res.status(400).json({ error: '概率范围为 1–99%，说明最多 280 字' })
-  const item = { id: randomUUID(), personalId, eventId, probability: value, rationale: rationale.trim(), updatedAt: new Date().toISOString() }
-  forecasts.set(`${personalId}:${eventId}`, item)
-  res.status(201).json({ forecast: item })
+  if (!Number.isInteger(value) || value < 1 || value > 99 || !Number.isInteger(stake) || stake < 10 || stake > 1000 || typeof rationale !== 'string' || rationale.length > 280) return res.status(400).json({ error: '概率范围为 1–99%，虚拟积分投入为 10–1000，说明最多 280 字' })
+  const key = `${personalId}:${eventId}`
+  const existing = forecasts.get(key)
+  if (existing && existing.status !== 'pending') return res.status(409).json({ error: '该预测已结算，不能修改或重复投入' })
+  const balance = virtualBalances.get(personalId) ?? 10000
+  if (!existing && balance < stake) return res.status(400).json({ error: '虚拟积分余额不足' })
+  if (!existing) virtualBalances.set(personalId, rounded(balance - stake))
+  const item = {
+    ...(existing || {}),
+    id: existing?.id || randomUUID(),
+    personalId,
+    eventId,
+    probability: value,
+    rationale: rationale.trim(),
+    stake: existing?.stake ?? stake,
+    rewardPercent: existing?.rewardPercent ?? event.rewardPercent,
+    status: 'pending',
+    result: null,
+    payout: null,
+    profit: null,
+    updatedAt: new Date().toISOString(),
+    settledAt: null,
+  }
+  forecasts.set(key, item)
+  const forcedResult = getOutcomePolicy('forecasts', personalId)
+  if (forcedResult) settleForecast(item, forcedResult)
+  res.status(existing ? 200 : 201).json({ forecast: item, balance: virtualBalances.get(personalId) ?? 10000 })
+})
+
+app.get('/api/etf-orders', (req, res) => {
+  const personalId = String(req.query.personalId || '')
+  if (!validPersonalId(personalId)) return res.status(400).json({ error: '请先注册并绑定个人 ID' })
+  const orders = [...etfOrders.values()].filter(item => item.personalId === personalId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  res.json({ personalId, balance: etfBalances.get(personalId) ?? 25000, orders: orders.slice(0, 30) })
+})
+
+app.post('/api/etf-orders', (req, res) => {
+  if (!frontendConfig.showEquityContracts) return res.status(403).json({ error: '后台已关闭合约 ETF 模块' })
+  if (!frontendConfig.demoOrdersEnabled) return res.status(403).json({ error: '后台已暂停模拟下单' })
+  const { personalId, symbol, side, orderType = 'market' } = req.body || {}
+  const quantity = Number(req.body?.quantity)
+  if (!validPersonalId(personalId)) return res.status(400).json({ error: '请先注册并绑定个人 ID' })
+  if (typeof symbol !== 'string' || typeof side !== 'string' || !['buy', 'sell'].includes(side) ||
+      !['market', 'limit'].includes(orderType) || !Number.isInteger(quantity) || quantity < 1 || quantity > 10000) {
+    return res.status(400).json({ error: '模拟订单代码、方向、类型或股数无效' })
+  }
+  const asset = frontendConfig.marketAssets.find(item => item.symbol === symbol)
+  if (!asset) return res.status(404).json({ error: '未找到该模拟标的' })
+  const amount = rounded(quantity * asset.last)
+  const balance = etfBalances.get(personalId) ?? 25000
+  if (balance < amount) return res.status(400).json({ error: '虚拟美元余额不足' })
+  etfBalances.set(personalId, rounded(balance - amount))
+  const item = {
+    id: randomUUID(), personalId, symbol: asset.symbol, name: asset.name, side, orderType, quantity,
+    price: asset.last, amount, payoutPercent: frontendConfig.contractPayoutPercent,
+    status: 'pending', result: null, payout: null, profit: null,
+    createdAt: new Date().toISOString(), settledAt: null,
+  }
+  etfOrders.set(item.id, item)
+  const forcedResult = getOutcomePolicy('etfOrders', personalId)
+  if (forcedResult) settleEtfOrder(item, forcedResult)
+  res.status(201).json({ order: item, balance: etfBalances.get(personalId) ?? 25000 })
 })
 
 app.post('/api/time-contracts', (req, res) => {
@@ -323,25 +912,37 @@ app.post('/api/time-contracts', (req, res) => {
   virtualBalances.set(personalId, balance - amount)
   const item = {
     id: randomUUID(), personalId, projectId, projectSymbol: project.symbol, direction, durationSeconds: duration, stake: amount,
-    status: 'pending', result: null, payoutPercent: timePayoutPercent(direction, projectId), entryPrice: project.curve[0], targetPrice: project.curve.at(-1), exitPrice: null, payout: null, profit: null,
+    status: 'pending', result: null, forcedResult: getOutcomePolicy('contracts', personalId), payoutPercent: timePayoutPercent(direction, projectId), entryPrice: project.curve[0], targetPrice: project.curve.at(-1), exitPrice: null, payout: null, profit: null,
     createdAt: new Date().toISOString(), settledAt: null,
   }
   predictions.set(item.id, item)
-  setTimeout(() => {
+  const settlementTimer = setTimeout(() => {
+    contractSettlementTimers.delete(item.id)
     if (item.status !== 'pending') return
     const exitPrice = item.targetPrice
     const delta = exitPrice - item.entryPrice
-    const result = Math.abs(delta) < item.entryPrice * 0.0001 ? 'draw' : ((delta > 0) === (item.direction === 'up') ? 'won' : 'lost')
-    const payout = result === 'won' ? rounded(item.stake * (1 + item.payoutPercent / 100)) : result === 'draw' ? item.stake : 0
-    item.status = result
-    item.result = result
-    item.exitPrice = exitPrice
-    item.payout = payout
-    item.profit = rounded(payout - item.stake)
-    item.settledAt = new Date().toISOString()
-    virtualBalances.set(item.personalId, rounded((virtualBalances.get(item.personalId) ?? 10000) + payout))
+    const result = item.forcedResult || (Math.abs(delta) < item.entryPrice * 0.0001 ? 'draw' : ((delta > 0) === (item.direction === 'up') ? 'won' : 'lost'))
+    if (result === 'draw') {
+      const previousPayout = item.payout || 0
+      item.status = result
+      item.result = result
+      item.exitPrice = exitPrice
+      item.payout = item.stake
+      item.profit = 0
+      item.settledAt = new Date().toISOString()
+      virtualBalances.set(item.personalId, rounded((virtualBalances.get(item.personalId) ?? 10000) + item.stake - previousPayout))
+    } else {
+      settleContract(item, result)
+    }
   }, duration * 1000)
-  while (predictions.size > 1000) predictions.delete(predictions.keys().next().value)
+  contractSettlementTimers.set(item.id, settlementTimer)
+  while (predictions.size > 1000) {
+    const oldestId = predictions.keys().next().value
+    const oldestTimer = contractSettlementTimers.get(oldestId)
+    if (oldestTimer) clearTimeout(oldestTimer)
+    contractSettlementTimers.delete(oldestId)
+    predictions.delete(oldestId)
+  }
   res.status(201).json({ contract: publicPrediction(item), balance: virtualBalances.get(personalId) })
 })
 
@@ -381,21 +982,25 @@ app.get('/api/wallet', (req, res) => {
   const personalId = String(req.query.personalId || '')
   if (!validPersonalId(personalId)) return res.status(400).json({ error: '个人 ID 无效' })
   const transactions = [...walletTransactions.values()].filter(row => row.personalId === personalId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-  res.json({ personalId, balance: walletBalances.get(personalId) || 0, transactions: transactions.map(safeTransaction) })
+  const balances = Object.fromEntries(depositCurrencies.map(currency => [currency, walletBalances.get(walletBalanceKey(personalId, currency)) || 0]))
+  res.json({ personalId, balance: balances.USDT, balances, transactions: transactions.map(safeTransaction) })
 })
 
 app.post('/api/wallet/deposits', (req, res) => {
   if (!frontendConfig.showDeposit) return res.status(403).json({ error: '后台已关闭演示充值' })
   if (!verifyWalletRequest(req, res)) return
   const { personalId, amount, network } = req.body
+  const currency = req.body.currency || 'USDT'
   const value = Number(amount)
-  if (!Number.isFinite(value) || value <= 0 || value > 100000 || !['TRC20', 'ERC20', 'Polygon'].includes(network)) {
-    return res.status(400).json({ error: '充值金额或网络无效' })
+  const currencyConfig = frontendConfig.depositAssets[currency]
+  if (!currencyConfig || !Number.isFinite(value) || value < currencyConfig.minimumAmount || value > 100000 || !currencyConfig.networks.some(item => item.network === network)) {
+    return res.status(400).json({ error: '充值币种、金额或网络无效，请检查后台演示配置' })
   }
-  const item = { id: randomUUID(), personalId, type: 'deposit', amount: rounded(value), fee: 0, network, address: '', status: 'completed', reason: '', createdAt: new Date().toISOString(), reviewedAt: new Date().toISOString() }
-  walletBalances.set(personalId, rounded((walletBalances.get(personalId) || 0) + item.amount))
+  const item = { id: randomUUID(), personalId, type: 'deposit', currency, amount: rounded(value), fee: 0, network, address: '', status: 'completed', reason: '', createdAt: new Date().toISOString(), reviewedAt: new Date().toISOString() }
+  const balanceKey = walletBalanceKey(personalId, currency)
+  walletBalances.set(balanceKey, rounded((walletBalances.get(balanceKey) || 0) + item.amount))
   walletTransactions.set(item.id, item)
-  res.status(201).json({ transaction: safeTransaction(item), balance: walletBalances.get(personalId) })
+  res.status(201).json({ transaction: safeTransaction(item), balance: walletBalances.get(balanceKey), currency })
 })
 
 app.post('/api/wallet/withdrawals', (req, res) => {
@@ -411,26 +1016,27 @@ app.post('/api/wallet/withdrawals', (req, res) => {
   }
   const fee = frontendConfig.withdrawalFee
   const total = rounded(value + fee)
-  const balance = walletBalances.get(personalId) || 0
+  const balanceKey = walletBalanceKey(personalId)
+  const balance = walletBalances.get(balanceKey) || 0
   if (balance < total) return res.status(400).json({ error: 'USDT 可用余额不足（提现金额另计演示手续费）' })
-  const item = { id: randomUUID(), personalId, type: 'withdrawal', amount: rounded(value), fee, network, address: address.trim(), status: 'pending', reason: '', createdAt: new Date().toISOString(), reviewedAt: null }
-  walletBalances.set(personalId, rounded(balance - total))
+  const item = { id: randomUUID(), personalId, type: 'withdrawal', currency: 'USDT', amount: rounded(value), fee, network, address: address.trim(), status: 'pending', reason: '', createdAt: new Date().toISOString(), reviewedAt: null }
+  walletBalances.set(balanceKey, rounded(balance - total))
   walletTransactions.set(item.id, item)
-  res.status(201).json({ transaction: safeTransaction(item), balance: walletBalances.get(personalId) })
+  res.status(201).json({ transaction: safeTransaction(item), balance: walletBalances.get(balanceKey) })
 })
 
-app.get('/api/admin/kyc-submissions', requireAdmin, (req, res) => {
+app.get('/api/admin/kyc-submissions', requirePermission('kyc'), (req, res) => {
   const status = req.query.status
   const items = [...submissions.values()].filter(row => !status || row.status === status).sort((a, b) => b.submittedAt.localeCompare(a.submittedAt))
   res.json({ submissions: items.map(safeSubmission) })
 })
 
-app.get('/api/admin/wallet-transactions', requireAdmin, (_req, res) => {
-  const transactions = [...walletTransactions.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+app.get('/api/admin/wallet-transactions', requirePermission('wallet'), (_req, res) => {
+  const transactions = [...walletTransactions.values()].filter(item => item.currency === 'USDT' || item.type === 'withdrawal').sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   res.json({ transactions: transactions.map(safeTransaction) })
 })
 
-app.patch('/api/admin/wallet-transactions/:id', requireAdmin, (req, res) => {
+app.patch('/api/admin/wallet-transactions/:id', requirePermission('wallet'), (req, res) => {
   const item = walletTransactions.get(req.params.id)
   if (!item) return res.status(404).json({ error: '未找到该资金流水' })
   if (item.type !== 'withdrawal' || item.status !== 'pending') return res.status(400).json({ error: '仅可审核待处理的提现申请' })
@@ -443,12 +1049,13 @@ app.patch('/api/admin/wallet-transactions/:id', requireAdmin, (req, res) => {
   item.reason = status === 'rejected' ? reason.trim() : ''
   item.reviewedAt = new Date().toISOString()
   if (status === 'rejected') {
-    walletBalances.set(item.personalId, rounded((walletBalances.get(item.personalId) || 0) + item.amount + item.fee))
+    const balanceKey = walletBalanceKey(item.personalId, item.currency || 'USDT')
+    walletBalances.set(balanceKey, rounded((walletBalances.get(balanceKey) || 0) + item.amount + item.fee))
   }
   res.json({ transaction: safeTransaction(item), balance: walletBalances.get(item.personalId) || 0 })
 })
 
-app.patch('/api/admin/kyc-submissions/:id', requireAdmin, (req, res) => {
+app.patch('/api/admin/kyc-submissions/:id', requirePermission('kyc'), (req, res) => {
   const item = submissions.get(req.params.id)
   if (!item) return res.status(404).json({ error: '未找到该 KYC 申请' })
   const { status, reason = '' } = req.body || {}

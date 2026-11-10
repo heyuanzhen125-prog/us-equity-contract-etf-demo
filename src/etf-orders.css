@@ -1,0 +1,11 @@
+.etf-order-history{display:grid;gap:7px;margin-top:12px;padding-top:10px;border-top:1px solid #252b35}
+.etf-order-history-head{display:flex;justify-content:space-between;color:#aeb5c0;font-size:9px}
+.etf-order-history-head span,.etf-order-history>small{color:#727b89;font-size:8px}
+.etf-order-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px;border:1px solid #252b35;border-radius:5px;background:#111720}
+.etf-order-row>div{display:grid;gap:4px;min-width:0}
+.etf-order-row b{color:#d8dce4;font-size:8px}
+.etf-order-row small{color:#737d8b;font-size:7px}
+.etf-order-row>span{font-size:8px;white-space:nowrap}
+.etf-order-row>span.pending{color:#e2c36d}
+.etf-order-row>span.won{color:#77d7a5}
+.etf-order-row>span.lost{color:#f18b8f}

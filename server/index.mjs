@@ -20,6 +20,20 @@ const frontendConfig = {
   marketIndices: [{s:'S&P 500',v:'6,812.34',c:'+0.74%'},{s:'纳斯达克',v:'23,104.61',c:'+1.12%'},{s:'道琼斯',v:'47,862.19',c:'+0.28%'},{s:'VIX',v:'18.42',c:'−2.16%',down:true}],
   siteName: 'Northstar Markets',
   marketSubtitle: '查看指数概况与后台发布的模拟项目。',
+  homeTitle: '市场概览',
+  equityContractTitle: '合约 ETF',
+  equityContractSubtitle: '浏览美股与杠杆 ETF 模拟行情，并使用虚拟账户体验下单。',
+  timeContractTitle: '时间合约',
+  timeContractSubtitle: '设定标的、方向与到期时间，体验独立的时间合约模拟。',
+  predictionTitle: '预测系统',
+  predictionSubtitle: '围绕事件问题记录概率判断，查看个人预测，不与时间合约共用订单。',
+  indexTitle: '美股主要指数',
+  indexSubtitle: '延时行情 · 仅供展示',
+  featuredTitle: '市场精选',
+  featuredSubtitle: '查看热门标的与当日表现',
+  demoProjectTitle: '模拟项目',
+  demoProjectSubtitle: '由后台发布的虚拟标的 · SIM 前缀 · 非实盘行情',
+  orderDisclaimer: '杠杆 ETF 可能放大损失 · 本平台为原型演示',
   marketDelayMinutes: 15,
   showMarketOverview: true,
   showEquityContracts: true,
@@ -29,17 +43,30 @@ const frontendConfig = {
   showWithdrawal: true,
   showKyc: true,
   demoOrdersEnabled: true,
+  showMarketPicks: true,
+  showDemoProjects: true,
+  showQuickOrder: true,
+  showWatchlistNav: true,
+  showPositionsNav: true,
+  showNewsNav: true,
+  showCalendarNav: true,
+  showHelpNav: true,
+  showSettingsNav: true,
   depositNetworks: ['TRC20', 'ERC20', 'Polygon'],
   minimumWithdrawal: 10,
   withdrawalFee: 0.5,
   contractDurations: [10, 30, 60],
   contractPayoutPercent: 80,
+  autoPayoutEnabled: false,
+  payoutMinPercent: 50,
+  payoutMaxPercent: 120,
+  payoutSensitivity: 30,
 }
 const forecastEvents = [
-  { id: 'EVT-SPY-WEEKLY-CLOSE', category: '美股', question: '标普 500 本周收盘高于本周开盘？', description: '按模拟指数的周线起点与周五收盘价判断。', consensus: 58, horizon: '本周五 16:00 ET', volume: '模拟参与 1,284 人' },
-  { id: 'EVT-NVDA-NEXT-SESSION', category: '个股', question: '英伟达下一交易日收涨？', description: '比较下一交易日收盘价与前一交易日收盘价。', consensus: 54, horizon: '下一交易日收盘', volume: '模拟参与 962 人' },
-  { id: 'EVT-VIX-BELOW-20', category: '宏观', question: 'VIX 指数本周保持在 20 以下？', description: '以周内收盘数据为准；本卡片目前仅用于记录判断。', consensus: 67, horizon: '本周五 16:00 ET', volume: '模拟参与 731 人' },
-  { id: 'EVT-QQQ-ABOVE-LEVEL', category: '指数', question: '纳斯达克 100 本周站上周初水平？', description: '依照模拟行情的周初基准价核对。', consensus: 51, horizon: '本周五 16:00 ET', volume: '模拟参与 588 人' },
+  { id: 'EVT-SPY-WEEKLY-CLOSE', category: '美股', question: '标普 500 本周收盘高于本周开盘？', description: '按模拟指数的周线起点与周五收盘价判断。', consensus: 58, horizon: '本周五 16:00 ET', volume: '模拟参与 1,284 人', rewardPercent: 80 },
+  { id: 'EVT-NVDA-NEXT-SESSION', category: '个股', question: '英伟达下一交易日收涨？', description: '比较下一交易日收盘价与前一交易日收盘价。', consensus: 54, horizon: '下一交易日收盘', volume: '模拟参与 962 人', rewardPercent: 75 },
+  { id: 'EVT-VIX-BELOW-20', category: '宏观', question: 'VIX 指数本周保持在 20 以下？', description: '以周内收盘数据为准；本卡片目前仅用于记录判断。', consensus: 67, horizon: '本周五 16:00 ET', volume: '模拟参与 731 人', rewardPercent: 65 },
+  { id: 'EVT-QQQ-ABOVE-LEVEL', category: '指数', question: '纳斯达克 100 本周站上周初水平？', description: '依照模拟行情的周初基准价核对。', consensus: 51, horizon: '本周五 16:00 ET', volume: '模拟参与 588 人', rewardPercent: 80 },
 ]
 const adminKey = process.env.ADMIN_REVIEW_KEY || 'local-demo-admin'
 const port = Number(process.env.API_PORT || 8787)
@@ -123,11 +150,26 @@ function publicProject(project) {
 function publicPrediction(item) {
   return {
     id: item.id, personalId: item.personalId, projectSymbol: item.projectSymbol, direction: item.direction,
-    durationSeconds: item.durationSeconds, stake: item.stake, status: item.status,
+    durationSeconds: item.durationSeconds, stake: item.stake, payoutPercent: item.payoutPercent, status: item.status,
     result: item.status === 'pending' ? null : item.result, entryPrice: item.entryPrice,
     exitPrice: item.status === 'pending' ? null : item.exitPrice, payout: item.status === 'pending' ? null : item.payout,
     profit: item.status === 'pending' ? null : item.profit, createdAt: item.createdAt, settledAt: item.settledAt,
   }
+}
+
+function timePayoutPercent(direction, projectId) {
+  const base = frontendConfig.contractPayoutPercent
+  if (!frontendConfig.autoPayoutEnabled) return base
+  const boundedBase = Math.min(frontendConfig.payoutMaxPercent, Math.max(frontendConfig.payoutMinPercent, base))
+  const open = [...predictions.values()].filter(item => item.status === 'pending' && (!projectId || item.projectId === projectId))
+  const upStake = open.filter(item => item.direction === 'up').reduce((sum, item) => sum + item.stake, 0)
+  const downStake = open.filter(item => item.direction === 'down').reduce((sum, item) => sum + item.stake, 0)
+  const total = upStake + downStake
+  if (!total) return boundedBase
+  const selectedStake = direction === 'up' ? upStake : downStake
+  const otherStake = direction === 'up' ? downStake : upStake
+  const adjusted = boundedBase + ((otherStake - selectedStake) / total) * frontendConfig.payoutSensitivity
+  return Math.round(Math.min(frontendConfig.payoutMaxPercent, Math.max(frontendConfig.payoutMinPercent, adjusted)))
 }
 
 function validProjectInput({ symbol, name, startPrice, targetChangePct }) {
@@ -143,9 +185,9 @@ app.get('/api/forecast-events', (_req, res) => res.json({ events: forecastEvents
 app.get('/api/admin/front-config', requireAdmin, (_req, res) => res.json({ config: frontendConfig, forecastEvents }))
 app.patch('/api/admin/front-config', requireAdmin, (req, res) => {
   const input = req.body || {}
-  const textFields = ['siteName', 'marketSubtitle']
+  const textFields = ['siteName', 'marketSubtitle', 'homeTitle', 'equityContractTitle', 'equityContractSubtitle', 'timeContractTitle', 'timeContractSubtitle', 'predictionTitle', 'predictionSubtitle', 'indexTitle', 'indexSubtitle', 'featuredTitle', 'featuredSubtitle', 'demoProjectTitle', 'demoProjectSubtitle', 'orderDisclaimer']
   for (const field of textFields) {
-    if (typeof input[field] !== 'string' || !input[field].trim() || input[field].length > (field === 'siteName' ? 40 : 140)) return res.status(400).json({ error: `${field} 内容无效` })
+    if (typeof input[field] !== 'string' || !input[field].trim() || input[field].length > (field === 'siteName' ? 40 : field === 'orderDisclaimer' ? 180 : 140)) return res.status(400).json({ error: `${field} 内容无效` })
     frontendConfig[field] = input[field].trim()
   }
   if (!Array.isArray(input.marketAssets) || input.marketAssets.length < 1 || input.marketAssets.length > 40) return res.status(400).json({ error: 'ETF 列表需要 1–40 个标的' })
@@ -157,7 +199,7 @@ app.patch('/api/admin/front-config', requireAdmin, (req, res) => {
   if (!Array.isArray(input.marketIndices) || input.marketIndices.length > 10 || input.marketIndices.some(index => !index || typeof index.s !== 'string' || !index.s.trim() || index.s.length > 30 || typeof index.v !== 'string' || index.v.length > 24 || typeof index.c !== 'string' || index.c.length > 24 || (index.down !== undefined && typeof index.down !== 'boolean'))) return res.status(400).json({ error: '指数卡片字段无效（最多 10 项）' })
   frontendConfig.marketAssets = input.marketAssets.map(asset => ({ ...asset, symbol: asset.symbol.toUpperCase(), name: asset.name.trim(), last: rounded(Number(asset.last)), change: Number(asset.change), spark: asset.spark.map(Number) }))
   frontendConfig.marketIndices = input.marketIndices.map(index => ({ ...index, s: index.s.trim() }))
-  for (const field of ['showMarketOverview', 'showEquityContracts', 'showTimeContracts', 'showPrediction', 'showDeposit', 'showWithdrawal', 'showKyc', 'demoOrdersEnabled']) {
+  for (const field of ['showMarketOverview', 'showEquityContracts', 'showTimeContracts', 'showPrediction', 'showDeposit', 'showWithdrawal', 'showKyc', 'demoOrdersEnabled', 'showMarketPicks', 'showDemoProjects', 'showQuickOrder', 'showWatchlistNav', 'showPositionsNav', 'showNewsNav', 'showCalendarNav', 'showHelpNav', 'showSettingsNav', 'autoPayoutEnabled']) {
     if (typeof input[field] !== 'boolean') return res.status(400).json({ error: `${field} 必须为开关` })
     frontendConfig[field] = input[field]
   }
@@ -165,13 +207,19 @@ app.patch('/api/admin/front-config', requireAdmin, (req, res) => {
   const minimumWithdrawal = Number(input.minimumWithdrawal)
   const withdrawalFee = Number(input.withdrawalFee)
   const payout = Number(input.contractPayoutPercent)
-  if (![0, 15, 30, 60].includes(delay) || !Number.isFinite(minimumWithdrawal) || minimumWithdrawal < 1 || minimumWithdrawal > 100000 || !Number.isFinite(withdrawalFee) || withdrawalFee < 0 || withdrawalFee > 100 || !Number.isInteger(payout) || payout < 1 || payout > 200) return res.status(400).json({ error: '行情延迟、提现限额或模拟结算参数无效' })
+  const payoutMin = Number(input.payoutMinPercent)
+  const payoutMax = Number(input.payoutMaxPercent)
+  const payoutSensitivity = Number(input.payoutSensitivity)
+  if (![0, 15, 30, 60].includes(delay) || !Number.isFinite(minimumWithdrawal) || minimumWithdrawal < 1 || minimumWithdrawal > 100000 || !Number.isFinite(withdrawalFee) || withdrawalFee < 0 || withdrawalFee > 100 || !Number.isInteger(payout) || payout < 1 || payout > 200 || !Number.isInteger(payoutMin) || payoutMin < 1 || payoutMin > 200 || !Number.isInteger(payoutMax) || payoutMax < payoutMin || payoutMax > 200 || !Number.isInteger(payoutSensitivity) || payoutSensitivity < 0 || payoutSensitivity > 100) return res.status(400).json({ error: '行情延迟、提现限额或模拟结算参数无效' })
   if (!Array.isArray(input.depositNetworks) || !input.depositNetworks.length || input.depositNetworks.some(network => !frontendConfig.depositNetworks.includes(network))) return res.status(400).json({ error: '请选择至少一个支持的演示网络' })
-  if (!Array.isArray(input.contractDurations) || !input.contractDurations.length || input.contractDurations.some(duration => ![10, 30, 60].includes(Number(duration)))) return res.status(400).json({ error: '合约期限只允许 10、30、60 秒' })
+  if (!Array.isArray(input.contractDurations) || !input.contractDurations.length || input.contractDurations.length > 20 || input.contractDurations.some(duration => !Number.isInteger(Number(duration)) || Number(duration) < 5 || Number(duration) > 3600)) return res.status(400).json({ error: '合约期限需为 5–3600 秒之间的整数，最多 20 项' })
   frontendConfig.marketDelayMinutes = delay
   frontendConfig.minimumWithdrawal = rounded(minimumWithdrawal)
   frontendConfig.withdrawalFee = rounded(withdrawalFee)
   frontendConfig.contractPayoutPercent = payout
+  frontendConfig.payoutMinPercent = payoutMin
+  frontendConfig.payoutMaxPercent = payoutMax
+  frontendConfig.payoutSensitivity = payoutSensitivity
   frontendConfig.depositNetworks = [...new Set(input.depositNetworks)]
   frontendConfig.contractDurations = [...new Set(input.contractDurations.map(Number))].sort((a, b) => a - b)
   res.json({ config: frontendConfig })
@@ -182,8 +230,9 @@ app.put('/api/admin/forecast-events', requireAdmin, (req, res) => {
   const normalized = []
   for (const [index, event] of events.entries()) {
     const { id, category, question, description, consensus, horizon } = event || {}
-    if (typeof id !== 'string' || !/^EVT-[A-Z0-9-]{3,30}$/.test(id) || typeof category !== 'string' || !category.trim() || category.length > 24 || typeof question !== 'string' || question.trim().length < 5 || question.length > 120 || typeof description !== 'string' || description.length > 280 || !Number.isInteger(Number(consensus)) || Number(consensus) < 1 || Number(consensus) > 99 || typeof horizon !== 'string' || horizon.length > 80) return res.status(400).json({ error: `第 ${index + 1} 条事件字段无效` })
-    normalized.push({ id, category: category.trim(), question: question.trim(), description: description.trim(), consensus: Number(consensus), horizon: horizon.trim(), volume: event.volume || '模拟参与 0 人' })
+    const rewardPercent = Number(event.rewardPercent ?? 80)
+    if (typeof id !== 'string' || !/^EVT-[A-Z0-9-]{3,30}$/.test(id) || typeof category !== 'string' || !category.trim() || category.length > 24 || typeof question !== 'string' || question.trim().length < 5 || question.length > 120 || typeof description !== 'string' || description.length > 280 || !Number.isInteger(Number(consensus)) || Number(consensus) < 1 || Number(consensus) > 99 || !Number.isInteger(rewardPercent) || rewardPercent < 1 || rewardPercent > 200 || typeof horizon !== 'string' || horizon.length > 80) return res.status(400).json({ error: `第 ${index + 1} 条事件字段无效` })
+    normalized.push({ id, category: category.trim(), question: question.trim(), description: description.trim(), consensus: Number(consensus), horizon: horizon.trim(), volume: event.volume || '模拟参与 0 人', rewardPercent })
   }
   if (new Set(normalized.map(event => event.id)).size !== normalized.length) return res.status(400).json({ error: '预测事件 ID 不能重复' })
   forecastEvents.splice(0, forecastEvents.length, ...normalized)
@@ -221,6 +270,13 @@ app.patch('/api/admin/projects/:id', requireAdmin, (req, res) => {
   project.curve = buildCurve(project.startPrice, project.targetChangePct, projects.size + Date.now() % 11)
   project.updatedAt = new Date().toISOString()
   res.json({ project: publicProject(project) })
+})
+
+app.get('/api/time-contracts/quote', (req, res) => {
+  if (!frontendConfig.showTimeContracts) return res.status(403).json({ error: '后台已关闭时间合约模块' })
+  const direction = String(req.query.direction || '')
+  if (!['up', 'down'].includes(direction)) return res.status(400).json({ error: '方向参数无效' })
+  res.json({ payoutPercent: timePayoutPercent(direction, String(req.query.projectId || '')), autoAdjusted: frontendConfig.autoPayoutEnabled })
 })
 
 app.get('/api/time-contracts', (req, res) => {
@@ -267,7 +323,7 @@ app.post('/api/time-contracts', (req, res) => {
   virtualBalances.set(personalId, balance - amount)
   const item = {
     id: randomUUID(), personalId, projectId, projectSymbol: project.symbol, direction, durationSeconds: duration, stake: amount,
-    status: 'pending', result: null, payoutPercent: frontendConfig.contractPayoutPercent, entryPrice: project.curve[0], targetPrice: project.curve.at(-1), exitPrice: null, payout: null, profit: null,
+    status: 'pending', result: null, payoutPercent: timePayoutPercent(direction, projectId), entryPrice: project.curve[0], targetPrice: project.curve.at(-1), exitPrice: null, payout: null, profit: null,
     createdAt: new Date().toISOString(), settledAt: null,
   }
   predictions.set(item.id, item)

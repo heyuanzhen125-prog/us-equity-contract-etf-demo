@@ -5,6 +5,15 @@
   "functions": {
     "api/[...path].mjs": {
       "maxDuration": 30
+    },
+    "api/admin/[...path].mjs": {
+      "maxDuration": 30
+    },
+    "api/time-contracts/[...path].mjs": {
+      "maxDuration": 30
+    },
+    "api/wallet/[...path].mjs": {
+      "maxDuration": 30
     }
   }
 }

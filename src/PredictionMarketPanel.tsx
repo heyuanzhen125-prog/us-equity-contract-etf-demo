@@ -2,14 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, ArrowUpRight, Check, CircleHelp, Clock3, LockKeyhole, TrendingUp } from 'lucide-react'
 import { useVisiblePolling } from './useVisiblePolling'
 
-type Forecast = { id: string; personalId: string; eventId: string; probability: number; rationale: string; stake: number; rewardPercent: number; status: 'pending' | 'won' | 'lost'; result: 'won' | 'lost' | null; payout: number | null; profit: number | null; updatedAt: string; settledAt: string | null }
+type Forecast = { id: string; personalId: string; eventId: string; probability: number; choice?: 'YES' | 'NO'; rationale: string; stake: number; rewardPercent: number; status: 'pending' | 'won' | 'lost'; result: 'won' | 'lost' | null; payout: number | null; profit: number | null; updatedAt: string; settledAt: string | null }
 type Event = { id: string; category: string; question: string; description: string; consensus: number; marketProbability?: number | null; predictionCount?: number; horizon: string; volume: string; rewardPercent: number; sourceExchange?: string; sourceUrl?: string; sourceProbability?: number; externalMarketId?: string }
 type ExchangeEvent = { id: string; platformEventId: string; exchange: string; category: string; question: string; probability: number; volume: number; endTime: string | null; url: string }
 
 
 export default function PredictionMarketPanel({ personalId, onRegister, notify, events, title, subtitle }: { personalId: string; onRegister: () => void; notify: (message: string) => void; events: Event[]; title: string; subtitle: string }) {
   const [forecasts, setForecasts] = useState<Forecast[]>([])
-  const [values, setValues] = useState<Record<string, number>>({})
+  const [choices, setChoices] = useState<Record<string, 'YES' | 'NO' | null>>({})
   const [notes, setNotes] = useState<Record<string, string>>({})
   const [stakes, setStakes] = useState<Record<string, number>>({})
   const [balance, setBalance] = useState(10000)
@@ -28,7 +28,7 @@ export default function PredictionMarketPanel({ personalId, onRegister, notify, 
   const categories = ['全部', ...new Set(allEvents.map(event => event.category))]
   const visible = category === '全部' ? allEvents : allEvents.filter(event => event.category === category)
 
-  useEffect(() => { setValues(current => ({ ...Object.fromEntries(allEvents.map(event => [event.id, current[event.id] ?? event.consensus])), ...current })); setNotes(current => ({ ...Object.fromEntries(allEvents.map(event => [event.id, current[event.id] ?? ''])), ...current })) }, [allEvents])
+  useEffect(() => { setNotes(current => ({ ...Object.fromEntries(allEvents.map(event => [event.id, current[event.id] ?? ''])), ...current })) }, [allEvents])
 
   useEffect(() => {
     initialized.current = false
@@ -57,7 +57,7 @@ export default function PredictionMarketPanel({ personalId, onRegister, notify, 
       setForecasts(rows)
       setBalance(result.balance ?? 10000)
       if (!initialized.current) {
-        setValues(current => ({ ...current, ...Object.fromEntries(rows.map(row => [row.eventId, row.probability])) }))
+        setChoices(current => ({ ...current, ...Object.fromEntries(rows.map(row => [row.eventId, row.choice || (row.probability >= 50 ? 'YES' : 'NO')])) }))
         setNotes(current => ({ ...current, ...Object.fromEntries(rows.map(row => [row.eventId, row.rationale])) }))
         setStakes(current => ({ ...current, ...Object.fromEntries(rows.map(row => [row.eventId, row.stake])) }))
         initialized.current = true
@@ -69,14 +69,17 @@ export default function PredictionMarketPanel({ personalId, onRegister, notify, 
 
   const save = async (event: Event) => {
     if (!personalId) { onRegister(); notify('请先注册账户，预测将绑定到个人 ID'); return }
+    const choice = choices[event.id]
+    if (!choice) { notify('请先选择 YES 或 NO'); return }
     const saved = forecasts.find(row => row.eventId === event.id)
     if (saved && saved.status !== 'pending') { notify('该预测已结算，不能修改或重复投入'); return }
     setSaving(event.id)
     try {
-      const response = await fetch('/api/forecasts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ personalId, eventId: event.id, probability: values[event.id], rationale: notes[event.id] || '', stake: saved?.stake ?? stakes[event.id] ?? 100 }) })
+      const response = await fetch('/api/forecasts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ personalId, eventId: event.id, choice, probability: choice === 'YES' ? 75 : 25, rationale: notes[event.id] || '', stake: saved?.stake ?? stakes[event.id] ?? 100 }) })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || '保存预测失败')
       setForecasts(current => [result.forecast, ...current.filter(row => row.eventId !== event.id)])
+      setChoices(current => ({ ...current, [event.id]: result.forecast.choice || choice }))
       setBalance(result.balance)
       setStakes(current => ({ ...current, [event.id]: result.forecast.stake }))
       notify(result.forecast.status === 'pending' ? '预测已保存，投入的虚拟积分等待后台结算' : `预测已由后台演示规则结算：${result.forecast.status === 'won' ? '赢' : '输'}`)
@@ -86,12 +89,12 @@ export default function PredictionMarketPanel({ personalId, onRegister, notify, 
 
   return <section className="forecast-panel">
     <div className="forecast-intro"><div><div className="forecast-kicker"><Activity size={13}/> FORECAST WORKSPACE</div><h2>{title}</h2><p>{subtitle} 此模块使用虚拟积分，不涉及真实资金。</p></div><div className="forecast-account"><LockKeyhole size={14}/><span>{personalId ? `绑定个人 ID · ${personalId}` : '注册后可保存个人预测'}</span></div></div>
-    <div className="forecast-disclaimer"><CircleHelp size={15}/><span>模拟预测市场：概率由 Manifold CPMM 做市公式按用户虚拟积分投入动态计算；概率低于 50% 记为 NO，高于或等于 50% 记为 YES。结果及演示收益仍按后台规则处理；积分不具备现金价值。</span></div>
+    <div className="forecast-disclaimer"><CircleHelp size={15}/><span>模拟预测市场：下单时直接选择 YES 或 NO；市场概率由 Manifold CPMM 做市公式按虚拟积分投入动态计算。结果及演示收益仍按后台规则处理；积分不具备现金价值。</span></div>
     {personalId && <div className="forecast-balance">虚拟积分余额 <b>{balance.toLocaleString('en-US')} PTS</b></div>}
     <div className="forecast-toolbar"><div className="forecast-filters">{categories.map(item => <button className={category===item?'selected':''} key={item} onClick={()=>setCategory(item)}>{item}</button>)}</div><span><Clock3 size={12}/>{['Kalshi','Polymarket'].map(source=>`${source}${exchangeSources[source]?'已同步':'同步中'}`).join(' · ')} · {exchangeUpdatedAt?new Date(exchangeUpdatedAt).toLocaleTimeString():'每分钟刷新'}</span></div>
-    {allEvents.length===0?<div className="forecast-empty">{exchangeUnavailable?'交易所暂时无法同步，后台发布的模拟事件仍可用。':'正在同步交易所事件；后台模拟事件可在此处同时交易。'}</div>:<div className="forecast-grid">{visible.map(event => { const value = values[event.id] ?? event.consensus; const saved = forecasts.find(row => row.eventId === event.id); const predictionCount = event.predictionCount ?? 0; const marketProbability = event.marketProbability ?? event.consensus; return <article className="forecast-card" key={event.id}>
+    {allEvents.length===0?<div className="forecast-empty">{exchangeUnavailable?'交易所暂时无法同步，后台发布的模拟事件仍可用。':'正在同步交易所事件；后台模拟事件可在此处同时交易。'}</div>:<div className="forecast-grid">{visible.map(event => { const saved = forecasts.find(row => row.eventId === event.id); const predictionCount = event.predictionCount ?? 0; const marketProbability = event.marketProbability ?? event.consensus; return <article className="forecast-card" key={event.id}>
       <div className="forecast-card-top"><span>{event.sourceExchange ? `${event.sourceExchange} · ${event.category}` : event.category}</span><small><TrendingUp size={12}/> {predictionCount ? `${predictionCount} 人已预测` : event.sourceExchange ? '交易所同步事件' : '后台起始概率'}</small></div><h3>{event.question}</h3><p>{event.description}</p><div className="forecast-reward"><span>{event.sourceExchange ? '本平台模拟收益比例' : '演示收益比例'}</span><b>+{event.rewardPercent}%</b></div><div className="forecast-progress"><div><span>{event.sourceExchange ? `${event.sourceExchange} 参考概率` : predictionCount ? 'CPMM 市场概率' : '后台起始概率'}</span><b>{marketProbability}%</b></div><div className="forecast-track"><i style={{ width: `${marketProbability}%` }}/></div></div>
-      <label className="forecast-range-label">我的概率判断 <strong>{value}% · {value >= 50 ? 'YES' : 'NO'}</strong><input aria-label={`${event.question} 概率`} type="range" min="1" max="99" value={value} disabled={saved?.status !== undefined && saved.status !== 'pending'} onChange={e=>setValues(current=>({...current,[event.id]:Number(e.target.value)}))}/></label>
+      <div className="forecast-choice-field"><span>我的方向选择</span><div className="forecast-choice-buttons"><button type="button" className={choices[event.id]==='YES'?'yes selected':''} disabled={saved?.status !== undefined && saved.status !== 'pending'} onClick={()=>setChoices(current=>({...current,[event.id]:'YES'}))}>YES</button><button type="button" className={choices[event.id]==='NO'?'no selected':''} disabled={saved?.status !== undefined && saved.status !== 'pending'} onClick={()=>setChoices(current=>({...current,[event.id]:'NO'}))}>NO</button></div></div>
       <label className="forecast-note-label">判断依据（选填）<textarea rows={2} maxLength={280} value={notes[event.id]||''} disabled={saved?.status !== undefined && saved.status !== 'pending'} onChange={e=>setNotes(current=>({...current,[event.id]:e.target.value}))} placeholder="记录你参考的数据或理由，最多 280 字"/></label>
       <label className="forecast-stake">投入虚拟积分{saved && <span>{saved.stake} PTS 已投入</span>}<input type="number" min="10" max="1000" step="10" value={saved?.stake ?? stakes[event.id] ?? 100} disabled={Boolean(saved)} onChange={e=>setStakes(current=>({...current,[event.id]:Number(e.target.value)}))}/></label>
       <div className="forecast-card-footer"><span><Clock3 size={12}/> {event.horizon}{saved && <strong className={`forecast-result ${saved.status}`}>{saved.status==='pending'?'待结算':saved.status==='won'?'已赢':'已输'}</strong>}</span><button onClick={()=>void save(event)} disabled={saving===event.id||saved?.status==='won'||saved?.status==='lost'}>{saving===event.id?'保存中…':saved?<><Check size={13}/> 已保存</>:'保存并投入'} <ArrowUpRight size={13}/></button></div>

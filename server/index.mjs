@@ -512,7 +512,7 @@ function publicForecastEvents() {
     }
     for (const item of submissions.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))) {
       try {
-        pool = calculateCpmmPurchase(pool, 0.5, item.stake, item.probability >= 50 ? 'YES' : 'NO').newPool
+        pool = calculateCpmmPurchase(pool, 0.5, item.stake, item.choice || (item.probability >= 50 ? 'YES' : 'NO')).newPool
       } catch {
         // If an extreme sequence exhausts floating-point precision, keep the
         // last valid quote so one thin event does not break the public config.
@@ -1035,7 +1035,7 @@ app.get('/api/forecasts', (req, res) => {
 
 app.post('/api/forecasts', async (req, res) => {
   if (!frontendConfig.showPrediction) return res.status(403).json({ error: '后台已关闭预测系统' })
-  const { personalId, eventId, probability, rationale = '' } = req.body || {}
+  const { personalId, eventId, probability, choice: requestedChoice, rationale = '' } = req.body || {}
   const stake = Number(req.body?.stake)
   if (!validPersonalId(personalId)) return res.status(400).json({ error: '请先注册并绑定个人 ID' })
   if (typeof eventId !== 'string' || !/^EVT-[A-Z0-9-]{3,30}$/.test(eventId)) return res.status(400).json({ error: '预测事件无效' })
@@ -1045,7 +1045,8 @@ app.post('/api/forecasts', async (req, res) => {
     event = syncedExchangeEvents.get(eventId)
   }
   if (!event) return res.status(404).json({ error: '未找到该模拟预测事件' })
-  const value = Number(probability)
+  const choice = requestedChoice === 'YES' || requestedChoice === 'NO' ? requestedChoice : null
+  const value = choice ? (choice === 'YES' ? 75 : 25) : Number(probability)
   if (!Number.isInteger(value) || value < 1 || value > 99 || !Number.isInteger(stake) || stake < 10 || stake > 1000 || typeof rationale !== 'string' || rationale.length > 280) return res.status(400).json({ error: '概率范围为 1–99%，虚拟积分投入为 10–1000，说明最多 280 字' })
   const key = `${personalId}:${eventId}`
   const existing = forecasts.get(key)
@@ -1059,6 +1060,7 @@ app.post('/api/forecasts', async (req, res) => {
     personalId,
     eventId,
     probability: value,
+    choice: choice || (value >= 50 ? 'YES' : 'NO'),
     rationale: rationale.trim(),
     stake: existing?.stake ?? stake,
     rewardPercent: existing?.rewardPercent ?? event.rewardPercent,

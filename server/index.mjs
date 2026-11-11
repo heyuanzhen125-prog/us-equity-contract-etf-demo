@@ -27,6 +27,7 @@ const agentRegistrations = new Map()
 const userReferralRegistrations = new Map()
 let exchangeEventsCache = { expiresAt: 0, payload: null }
 const syncedExchangeEvents = new Map()
+let marketQuotesCache = { expiresAt: 0, payload: null }
 const permissionModules = [
   { id: 'kyc', name: 'KYC 身份审核' },
   { id: 'wallet', name: 'USDT 资金流水' },
@@ -54,6 +55,15 @@ const frontendConfig = {
     { symbol: 'SPY', name: '标普 500 ETF', last: 681.42, change: 0.74, volume: '1.76B', type: '指数', color: '#84d6b2', spark: [17,18,15,22,20,24,21,27,23,30,28,34,32,39] },
     { symbol: 'AAPL', name: '苹果', last: 258.34, change: 0.32, volume: '1.24B', type: '2× 多头', color: '#84d6b2', spark: [18,16,21,20,23,19,25,24,29,26,31,30,35,37] },
     { symbol: 'MSTR', name: 'Strategy', last: 406.53, change: -3.12, volume: '928M', type: '2× 多头', color: '#fc8082', spark: [46,42,47,36,41,31,36,28,33,23,28,19,23,15] },
+    { symbol: 'QQQ', name: '纳斯达克 100 ETF', last: 100, change: 0, volume: '—', type: '指数 ETF', color: '#84d6b2', spark: [25,25,25,25,25,25,25,25] },
+    { symbol: 'IWM', name: '罗素 2000 ETF', last: 100, change: 0, volume: '—', type: '指数 ETF', color: '#84d6b2', spark: [25,25,25,25,25,25,25,25] },
+    { symbol: 'DIA', name: '道琼斯 ETF', last: 100, change: 0, volume: '—', type: '指数 ETF', color: '#84d6b2', spark: [25,25,25,25,25,25,25,25] },
+    { symbol: 'TQQQ', name: '纳指 3× 做多 ETF', last: 100, change: 0, volume: '—', type: '3× 多头 ETF', color: '#84d6b2', spark: [25,25,25,25,25,25,25,25] },
+    { symbol: 'SQQQ', name: '纳指 3× 做空 ETF', last: 100, change: 0, volume: '—', type: '3× 空头 ETF', color: '#fc8082', spark: [25,25,25,25,25,25,25,25] },
+    { symbol: 'SOXL', name: '半导体 3× 做多 ETF', last: 100, change: 0, volume: '—', type: '3× 多头 ETF', color: '#84d6b2', spark: [25,25,25,25,25,25,25,25] },
+    { symbol: 'SOXS', name: '半导体 3× 做空 ETF', last: 100, change: 0, volume: '—', type: '3× 空头 ETF', color: '#fc8082', spark: [25,25,25,25,25,25,25,25] },
+    { symbol: 'NVDL', name: 'NVDA 2× 做多 ETF', last: 100, change: 0, volume: '—', type: '2× 多头 ETF', color: '#84d6b2', spark: [25,25,25,25,25,25,25,25] },
+    { symbol: 'TSLL', name: 'TSLA 2× 做多 ETF', last: 100, change: 0, volume: '—', type: '2× 多头 ETF', color: '#84d6b2', spark: [25,25,25,25,25,25,25,25] },
   ],
   marketIndices: [{s:'S&P 500',v:'6,812.34',c:'+0.74%'},{s:'纳斯达克',v:'23,104.61',c:'+1.12%'},{s:'道琼斯',v:'47,862.19',c:'+0.28%'},{s:'VIX',v:'18.42',c:'−2.16%',down:true}],
   siteName: 'Northstar Markets',
@@ -599,7 +609,52 @@ async function syncExchangeEvents() {
   return payload
 }
 app.get('/api/exchange-events', async (_req, res) => res.json(await syncExchangeEvents()))
-app.get('/api/public-config', (_req, res) => res.json({ config: frontendConfig, forecastEvents: publicForecastEvents() }))
+async function syncMarketQuotes() {
+  const apiKey = process.env.MASSIVE_API_KEY?.trim()
+  if (!apiKey) return { provider: 'SIM', configured: false, connected: false, message: 'Massive 行情 API Key 尚未配置；当前为演示价格。', updatedAt: null, quotes: {} }
+  if (marketQuotesCache.payload && marketQuotesCache.expiresAt > Date.now()) return marketQuotesCache.payload
+  const symbols = frontendConfig.marketAssets.map(asset => asset.symbol).filter(Boolean)
+  const url = new URL('https://api.massive.com/v2/snapshot/locale/us/markets/stocks/tickers')
+  url.searchParams.set('tickers', symbols.join(','))
+  url.searchParams.set('apiKey', apiKey)
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(10000), headers: { accept: 'application/json' } })
+    if (!response.ok) throw new Error(`Massive 返回 HTTP ${response.status}`)
+    const data = await response.json()
+    const quotes = {}
+    for (const ticker of data.tickers || []) {
+      const last = Number(ticker.lastTrade?.p ?? ticker.min?.c ?? ticker.day?.c)
+      const previousClose = Number(ticker.prevDay?.c)
+      if (!Number.isFinite(last) || last <= 0) continue
+      const change = Number.isFinite(previousClose) && previousClose > 0 ? ((last - previousClose) / previousClose) * 100 : 0
+      const asset = frontendConfig.marketAssets.find(item => item.symbol === ticker.ticker)
+      quotes[ticker.ticker] = {
+        last: rounded(last), change: rounded(change),
+        volume: Number.isFinite(Number(ticker.day?.v)) ? `${Number(ticker.day.v).toLocaleString('en-US')} 股` : asset?.volume || '—',
+        updatedAt: Number.isFinite(Number(ticker.updated)) ? new Date(Number(ticker.updated) / 1e6).toISOString() : new Date().toISOString(),
+      }
+    }
+    if (!Object.keys(quotes).length) throw new Error('行情源没有返回可用标的报价')
+    const payload = { provider: 'Massive', configured: true, connected: true, message: 'Massive 行情已连接；延迟时效由账户数据权限决定。', updatedAt: new Date().toISOString(), quotes }
+    marketQuotesCache = { payload, expiresAt: Date.now() + 60000 }
+    return payload
+  } catch (error) {
+    return { provider: 'Massive', configured: true, connected: false, message: error instanceof Error ? `Massive 行情连接失败：${error.message}` : 'Massive 行情连接失败；当前显示演示价格。', updatedAt: marketQuotesCache.payload?.updatedAt || null, quotes: marketQuotesCache.payload?.quotes || {} }
+  }
+}
+
+app.get('/api/public-config', async (_req, res) => {
+  const marketData = await syncMarketQuotes()
+  const config = {
+    ...frontendConfig,
+    marketAssets: frontendConfig.marketAssets.map(asset => {
+      const quote = marketData.quotes[asset.symbol]
+      return quote ? { ...asset, last: quote.last, change: quote.change, volume: quote.volume, quoteSource: 'Massive' } : { ...asset, quoteSource: 'SIM' }
+    }),
+  }
+  const { quotes: _quotes, ...marketDataStatus } = marketData
+  res.json({ config, forecastEvents: publicForecastEvents(), marketData: marketDataStatus })
+})
 app.get('/api/forecast-events', (_req, res) => res.json({ events: publicForecastEvents() }))
 app.get('/api/admin/front-config', requirePermission('front-config'), (_req, res) => res.json({ config: frontendConfig, forecastEvents }))
 app.patch('/api/admin/front-config', requirePermission('front-config'), (req, res) => {
@@ -622,6 +677,7 @@ app.patch('/api/admin/front-config', requirePermission('front-config'), (req, re
   }
   if (!Array.isArray(input.marketIndices) || input.marketIndices.length > 10 || input.marketIndices.some(index => !index || typeof index.s !== 'string' || !index.s.trim() || index.s.length > 30 || typeof index.v !== 'string' || index.v.length > 24 || typeof index.c !== 'string' || index.c.length > 24 || (index.down !== undefined && typeof index.down !== 'boolean'))) return res.status(400).json({ error: '指数卡片字段无效（最多 10 项）' })
   frontendConfig.marketAssets = input.marketAssets.map(asset => ({ ...asset, symbol: asset.symbol.toUpperCase(), name: asset.name.trim(), last: rounded(Number(asset.last)), change: Number(asset.change), spark: asset.spark.map(Number) }))
+  marketQuotesCache.expiresAt = 0
   frontendConfig.marketIndices = input.marketIndices.map(index => ({ ...index, s: index.s.trim() }))
   for (const field of ['showMarketOverview', 'showEquityContracts', 'showTimeContracts', 'showPrediction', 'showDeposit', 'showWithdrawal', 'showKyc', 'demoOrdersEnabled', 'showMarketPicks', 'showDemoProjects', 'showQuickOrder', 'showWatchlistNav', 'showPositionsNav', 'showNewsNav', 'showCalendarNav', 'showHelpNav', 'showSettingsNav', 'autoPayoutEnabled']) {
     if (typeof input[field] !== 'boolean') return res.status(400).json({ error: `${field} 必须为开关` })
@@ -1121,7 +1177,7 @@ app.get('/api/etf-orders', (req, res) => {
   res.json({ personalId, balance: etfBalances.get(personalId) ?? 25000, orders: orders.slice(0, 30) })
 })
 
-app.post('/api/etf-orders', (req, res) => {
+app.post('/api/etf-orders', async (req, res) => {
   if (!frontendConfig.showEquityContracts) return res.status(403).json({ error: '后台已关闭合约 ETF 模块' })
   if (!frontendConfig.demoOrdersEnabled) return res.status(403).json({ error: '后台已暂停模拟下单' })
   const { personalId, symbol, side, orderType = 'market' } = req.body || {}
@@ -1134,13 +1190,15 @@ app.post('/api/etf-orders', (req, res) => {
   }
   const asset = frontendConfig.marketAssets.find(item => item.symbol === symbol)
   if (!asset) return res.status(404).json({ error: '未找到该模拟标的' })
-  const amount = rounded(quantity * asset.last)
+  if (process.env.MASSIVE_API_KEY?.trim()) await syncMarketQuotes()
+  const executionPrice = marketQuotesCache.payload?.quotes?.[symbol]?.last ?? asset.last
+  const amount = rounded(quantity * executionPrice)
   const balance = etfBalances.get(personalId) ?? 25000
   if (balance < amount) return res.status(400).json({ error: '虚拟美元余额不足' })
   etfBalances.set(personalId, rounded(balance - amount))
   const item = {
     id: randomUUID(), personalId, symbol: asset.symbol, name: asset.name, side, orderType, quantity,
-    price: asset.last, amount, leverage, exposureAmount: rounded(amount * leverage), payoutPercent: frontendConfig.contractPayoutPercent,
+    price: executionPrice, amount, leverage, exposureAmount: rounded(amount * leverage), payoutPercent: frontendConfig.contractPayoutPercent,
     status: 'pending', result: null, payout: null, profit: null,
     createdAt: new Date().toISOString(), settledAt: null,
   }

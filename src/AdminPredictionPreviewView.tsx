@@ -66,11 +66,21 @@ export default function AdminPredictionPreviewView({ adminKey }: { adminKey: str
         fetch('/api/admin/outcome-controls', { headers, signal }),
         fetch('/api/admin/orders', { headers, signal }),
       ])
-      const [controls, orderData] = await Promise.all([controlsResponse.json(), ordersResponse.json()])
-      if (!controlsResponse.ok) throw new Error(controls.error || '读取输赢控制状态失败')
-      if (!ordersResponse.ok) throw new Error(orderData.error || '读取订单列表失败')
+      const readJson = async <T,>(response: Response, label: string): Promise<T> => {
+        const text = await response.text()
+        let data: T
+        try { data = JSON.parse(text) as T }
+        catch { throw new Error(`${label}接口返回了非 JSON 响应（HTTP ${response.status}），请刷新页面重试`) }
+        if (!response.ok) throw new Error((data as { error?: string })?.error || `${label}请求失败（HTTP ${response.status}）`)
+        return data
+      }
+      const [controls, orderData] = await Promise.all([
+        readJson<ControlsSnapshot>(controlsResponse, '输赢控制'),
+        readJson<{ orders: Order[] }>(ordersResponse, '订单列表'),
+      ])
       setSnapshot(controls)
       setOrders(orderData.orders)
+      setError('')
     } catch (requestError) {
       if (signal?.aborted) return
       setError(requestError instanceof Error ? requestError.message : '读取输赢控制状态失败')

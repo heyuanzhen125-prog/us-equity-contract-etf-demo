@@ -528,7 +528,6 @@ app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'northstar-l
 // Keep external discovery separate from this platform's own prediction orders.
 async function syncExchangeEvents() {
   if (exchangeEventsCache.payload && exchangeEventsCache.expiresAt > Date.now()) return exchangeEventsCache.payload
-  const settled = []
   const fetchJson = async (url) => {
     const response = await fetch(url, { signal: AbortSignal.timeout(8000), headers: { accept: 'application/json' } })
     if (!response.ok) throw new Error(`HTTP ${response.status}`)

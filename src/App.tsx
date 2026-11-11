@@ -110,6 +110,19 @@ export default function App() {
     localStorage.setItem('northstar.demo.personalId', migratedId)
     return migratedId
   })
+  useEffect(() => {
+    if (!registeredEmail || !personalId) return
+    const controller = new AbortController()
+    void fetch('/api/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: registeredEmail, personalId, referralCode: '' }),
+      signal: controller.signal,
+    }).then(response => {
+      if (!response.ok && response.status !== 409) console.warn('Unable to sync existing demo account with the member directory')
+    }).catch(error => { if (!controller.signal.aborted) console.warn('Unable to sync existing demo account with the member directory', error) })
+    return () => controller.abort()
+  }, [registeredEmail, personalId])
   const [inviteCount, setInviteCount] = useState(0)
   const personalInviteLink = useMemo(() => {
     if (!personalId) return ''

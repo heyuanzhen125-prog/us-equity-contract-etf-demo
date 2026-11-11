@@ -32,6 +32,106 @@ const userAccounts = new Map()
 let exchangeEventsCache = { expiresAt: 0, payload: null }
 const syncedExchangeEvents = new Map()
 let marketQuotesCache = { expiresAt: 0, payload: null }
+
+function platformDatabaseConfig() {
+  const url = process.env.SUPABASE_URL?.trim().replace(/\/$/, '') || ''
+  const secretKey = process.env.SUPABASE_SECRET_KEY?.trim() || ''
+  return url && secretKey ? { url, secretKey } : null
+}
+
+async function platformDatabaseRequest(table, query = '', { method = 'GET', body, prefer } = {}) {
+  const config = platformDatabaseConfig()
+  if (!config) return null
+  const response = await fetch(`${config.url}/rest/v1/${table}${query}`, {
+    method,
+    headers: {
+      apikey: config.secretKey,
+      Authorization: `Bearer ${config.secretKey}`,
+      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      ...(prefer ? { Prefer: prefer } : {}),
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  })
+  if (!response.ok) throw new Error(`订单数据库请求失败（${response.status}）`)
+  if (response.status === 204) return null
+  const text = await response.text()
+  return text ? JSON.parse(text) : null
+}
+
+function serializePlatformOrder(kind, item) {
+  const symbol = kind === 'contracts'
+    ? item.projectSymbol
+    : kind === 'forecasts'
+      ? forecastEvents.find(event => event.id === item.eventId)?.question || item.eventId
+      : item.symbol
+  const createdAt = kind === 'forecasts' ? item.updatedAt : item.createdAt
+  return {
+    id: item.id,
+    kind,
+    personal_id: item.personalId,
+    symbol,
+    status: item.status,
+    result: item.result || null,
+    created_at: createdAt,
+    updated_at: new Date().toISOString(),
+    order_data: item,
+  }
+}
+
+async function savePlatformOrder(kind, item) {
+  if (!platformDatabaseConfig()) return false
+  await platformDatabaseRequest('platform_orders', '?on_conflict=id', {
+    method: 'POST',
+    body: serializePlatformOrder(kind, item),
+    prefer: 'resolution=merge-duplicates,return=minimal',
+  })
+  return true
+}
+
+async function persistOrderOrRespond(res, kind, item) {
+  if (!platformDatabaseConfig()) {
+    if (!process.env.VERCEL) return true
+    res.status(503).json({ error: '订单持久化数据库尚未配置，暂不能提交订单' })
+    return false
+  }
+  try {
+    await savePlatformOrder(kind, item)
+    return true
+  } catch (error) {
+    console.error('Unable to persist platform order', error)
+    res.status(503).json({ error: '订单暂未写入数据库，请稍后重试' })
+    return false
+  }
+}
+
+async function loadPlatformOrders(personalId = '') {
+  if (!platformDatabaseConfig()) return null
+  const filter = personalId ? `&personal_id=eq.${encodeURIComponent(personalId)}` : ''
+  const rows = await platformDatabaseRequest('platform_orders', `?select=kind,order_data&order=created_at.desc&limit=300${filter}`)
+  return (rows || []).map(row => ({ kind: row.kind, item: row.order_data }))
+}
+
+async function savePlatformMember(member) {
+  if (!platformDatabaseConfig()) return false
+  await platformDatabaseRequest('platform_members', '?on_conflict=personal_id', {
+    method: 'POST',
+    body: {
+      personal_id: member.personalId,
+      email: member.email,
+      inviter_id: member.inviterId || null,
+      agent_id: member.agentId || null,
+      created_at: member.createdAt,
+      kyc_status: member.kycStatus || 'unverified',
+    },
+    prefer: 'resolution=merge-duplicates,return=minimal',
+  })
+  return true
+}
+
+async function loadPlatformMembers() {
+  if (!platformDatabaseConfig()) return null
+  return await platformDatabaseRequest('platform_members', '?select=personal_id,email,inviter_id,agent_id,created_at,kyc_status&order=created_at.desc&limit=1000') || []
+}
 const permissionModules = [
   { id: 'kyc', name: 'KYC 身份审核' },
   { id: 'members', name: '成员列表' },
@@ -512,6 +612,7 @@ function settleContract(item, result) {
   item.profit = rounded(payout - item.stake)
   item.settledAt = new Date().toISOString()
   virtualBalances.set(item.personalId, rounded((virtualBalances.get(item.personalId) ?? 10000) + payout - previousPayout))
+  void savePlatformOrder('contracts', item).catch(error => console.error('Unable to persist settled time contract', error))
 }
 
 function timePayoutPercent(direction, projectId) {
@@ -542,6 +643,7 @@ function settleForecast(item, result) {
   item.profit = rounded(payout - item.stake)
   item.settledAt = new Date().toISOString()
   virtualBalances.set(item.personalId, rounded((virtualBalances.get(item.personalId) ?? 10000) + payout - previousPayout))
+  void savePlatformOrder('forecasts', item).catch(error => console.error('Unable to persist settled forecast', error))
   return true
 }
 
@@ -554,6 +656,7 @@ function settleEtfOrder(item, result) {
   item.profit = rounded(payout - item.amount)
   item.settledAt = new Date().toISOString()
   etfBalances.set(item.personalId, rounded((etfBalances.get(item.personalId) ?? 25000) + payout - previousPayout))
+  void savePlatformOrder('etfOrders', item).catch(error => console.error('Unable to persist settled ETF order', error))
   return true
 }
 
@@ -977,7 +1080,7 @@ app.put('/api/admin/outcome-controls/:kind', requirePermission('prediction-previ
   })
 })
 
-app.get('/api/admin/orders', requirePermission('prediction-preview'), (_req, res) => {
+app.get('/api/admin/orders', requirePermission('prediction-preview'), async (_req, res) => {
   const contracts = [...predictions.values()].map(item => ({
     id: item.id, kind: 'contracts', personalId: item.personalId, symbol: item.projectSymbol,
     direction: item.direction, durationSeconds: item.durationSeconds, stake: item.stake,
@@ -997,13 +1100,31 @@ app.get('/api/admin/orders', requirePermission('prediction-preview'), (_req, res
     direction: item.side, quantity: item.quantity, leverage: item.leverage || 1, exposureAmount: item.exposureAmount || item.amount, stake: item.amount, payoutPercent: item.payoutPercent,
     status: item.status, result: item.result, profit: item.profit, createdAt: item.createdAt,
   }))
-  const orders = [...contracts, ...forecastOrders, ...equityOrders]
+  const stored = await loadPlatformOrders()
+  const storedOrders = (stored || []).map(({ kind, item }) => kind === 'contracts' ? ({
+    id: item.id, kind, personalId: item.personalId, symbol: item.projectSymbol,
+    direction: item.direction, durationSeconds: item.durationSeconds, stake: item.stake,
+    payoutPercent: item.payoutPercent, status: item.status, result: item.result,
+    profit: item.profit, createdAt: item.createdAt,
+  }) : kind === 'forecasts' ? ({
+    id: item.id, kind, personalId: item.personalId,
+    symbol: forecastEvents.find(event => event.id === item.eventId)?.question || item.eventId,
+    probability: item.probability, stake: item.stake, payoutPercent: item.rewardPercent,
+    status: item.status, result: item.result, profit: item.profit, createdAt: item.updatedAt,
+  }) : ({
+    id: item.id, kind, personalId: item.personalId, symbol: item.symbol,
+    direction: item.side, quantity: item.quantity, leverage: item.leverage || 1,
+    exposureAmount: item.exposureAmount || item.amount, stake: item.amount, payoutPercent: item.payoutPercent,
+    status: item.status, result: item.result, profit: item.profit, createdAt: item.createdAt,
+  }))
+  const orderIndex = new Map([...storedOrders, ...contracts, ...forecastOrders, ...equityOrders].map(order => [`${order.kind}:${order.id}`, order]))
+  const orders = [...orderIndex.values()]
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .slice(0, 300)
   res.json({ orders })
 })
 
-app.patch('/api/admin/orders/:kind/:id/result', requirePermission('prediction-preview'), (req, res) => {
+app.patch('/api/admin/orders/:kind/:id/result', requirePermission('prediction-preview'), async (req, res) => {
   const { kind, id } = req.params
   const { result } = req.body || {}
   if (!['contracts', 'forecasts', 'etfOrders'].includes(kind)) return res.status(404).json({ error: '订单类型无效' })
@@ -1023,6 +1144,7 @@ app.patch('/api/admin/orders/:kind/:id/result', requirePermission('prediction-pr
   }
   else if (kind === 'forecasts') settleForecast(order, result)
   else settleEtfOrder(order, result)
+  await savePlatformOrder(kind, order)
   res.json({ ok: true, order })
 })
 
@@ -1149,7 +1271,7 @@ app.delete('/api/admin/agents/:id', requirePermission('agents'), (req, res) => {
 
 // Public referral registration endpoint. It intentionally lives under the same
 // Vercel function route as admin agent management so both paths share agent state.
-app.post('/api/admin/agents/register', (req, res) => {
+app.post('/api/admin/agents/register', async (req, res) => {
   const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : ''
   const personalId = typeof req.body?.personalId === 'string' ? req.body.personalId.trim().toUpperCase() : ''
   const code = typeof req.body?.referralCode === 'string' ? req.body.referralCode.trim().toUpperCase() : ''
@@ -1164,15 +1286,20 @@ app.post('/api/admin/agents/register', (req, res) => {
   if ([...agents.values()].some(item => item.members.some(member => member.personalId === personalId))) {
     return res.status(409).json({ error: '该个人 ID 已关联其他代理' })
   }
+  const createdAt = new Date().toISOString()
+  if (platformDatabaseConfig()) {
+    try { await savePlatformMember({ personalId, email, agentId: agent.id, createdAt }) }
+    catch (error) { console.error('Unable to persist agent member', error); return res.status(503).json({ error: '成员数据库暂不可用，请稍后重试' }) }
+  } else if (process.env.VERCEL) return res.status(503).json({ error: '成员数据库尚未配置，暂不能完成账户登记' })
   const member = { personalId, name: email }
   agent.members.push(member)
-  agentRegistrations.set(personalId, { email, agentId: agent.id, createdAt: new Date().toISOString() })
-  userAccounts.set(personalId, { personalId, email, agentId: agent.id, createdAt: new Date().toISOString() })
+  agentRegistrations.set(personalId, { email, agentId: agent.id, createdAt })
+  userAccounts.set(personalId, { personalId, email, agentId: agent.id, createdAt })
   res.status(201).json({ ok: true, agent: { id: agent.id, code: agent.code, name: agent.name }, member })
 })
 
 // Public demo registration records account metadata only. Passwords are never accepted or stored.
-app.post('/api/register', (req, res) => {
+app.post('/api/register', async (req, res) => {
   const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : ''
   const personalId = typeof req.body?.personalId === 'string' ? req.body.personalId.trim().toUpperCase() : ''
   const referralCode = typeof req.body?.referralCode === 'string' ? req.body.referralCode.trim().toUpperCase() : ''
@@ -1195,6 +1322,15 @@ app.post('/api/register', (req, res) => {
   }
   const createdAt = new Date().toISOString()
   const account = { personalId, email, createdAt, inviterId, agentId: agent?.id || '' }
+  if (platformDatabaseConfig()) {
+    try { await savePlatformMember(account) }
+    catch (error) {
+      console.error('Unable to persist platform member', error)
+      return res.status(503).json({ error: '账户登记数据库暂不可用，请稍后重试' })
+    }
+  } else if (process.env.VERCEL) {
+    return res.status(503).json({ error: '成员数据库尚未配置，暂不能完成账户登记' })
+  }
   userAccounts.set(personalId, account)
   if (inviterId) userReferralRegistrations.set(personalId, { email, inviterId, createdAt })
   if (agent) {
@@ -1204,8 +1340,13 @@ app.post('/api/register', (req, res) => {
   res.status(201).json({ ok: true, personalId })
 })
 
-app.get('/api/admin/members', requirePermission('members'), (_req, res) => {
-  const members = new Map(userAccounts)
+app.get('/api/admin/members', requirePermission('members'), async (_req, res) => {
+  const storedMembers = await loadPlatformMembers()
+  const members = new Map((storedMembers || []).map(item => [item.personal_id, {
+    personalId: item.personal_id, email: item.email, inviterId: item.inviter_id || '',
+    agentId: item.agent_id || '', createdAt: item.created_at, kycStatus: item.kyc_status,
+  }]))
+  for (const [personalId, member] of userAccounts.entries()) members.set(personalId, { ...members.get(personalId), ...member })
   for (const [personalId, item] of userReferralRegistrations.entries()) {
     if (!members.has(personalId)) members.set(personalId, { personalId, email: item.email, createdAt: item.createdAt, inviterId: item.inviterId })
   }
@@ -1234,7 +1375,7 @@ app.get('/api/admin/members', requirePermission('members'), (_req, res) => {
     walletTransactions: [...walletTransactions.values()].filter(item => item.personalId === member.personalId).length,
     orderCount: [...etfOrders.values()].filter(item => item.personalId === member.personalId).length + [...predictions.values()].filter(item => item.personalId === member.personalId).length + [...forecasts.values()].filter(item => item.personalId === member.personalId).length,
   })).sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
-  res.json({ members: rows, persistence: 'ephemeral-demo' })
+  res.json({ members: rows, persistence: platformDatabaseConfig() ? 'supabase' : 'ephemeral-demo' })
 })
 
 app.get('/api/referrals/:personalId', (req, res) => {
@@ -1244,7 +1385,7 @@ app.get('/api/referrals/:personalId', (req, res) => {
   res.json({ personalId, inviteCount })
 })
 
-app.post('/api/referrals/register', (req, res) => {
+app.post('/api/referrals/register', async (req, res) => {
   const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : ''
   const personalId = typeof req.body?.personalId === 'string' ? req.body.personalId.trim().toUpperCase() : ''
   const inviterId = typeof req.body?.referralCode === 'string' ? req.body.referralCode.trim().toUpperCase() : ''
@@ -1254,7 +1395,12 @@ app.post('/api/referrals/register', (req, res) => {
   if (userReferralRegistrations.has(personalId) || [...userReferralRegistrations.values()].some(item => item.email === email)) {
     return res.status(409).json({ error: '该演示账户已登记邀请关系' })
   }
-  userReferralRegistrations.set(personalId, { email, inviterId, createdAt: new Date().toISOString() })
+  const createdAt = new Date().toISOString()
+  if (platformDatabaseConfig()) {
+    try { await savePlatformMember({ personalId, email, inviterId, createdAt }) }
+    catch (error) { console.error('Unable to persist referral member', error); return res.status(503).json({ error: '成员数据库暂不可用，请稍后重试' }) }
+  } else if (process.env.VERCEL) return res.status(503).json({ error: '成员数据库尚未配置，暂不能完成账户登记' })
+  userReferralRegistrations.set(personalId, { email, inviterId, createdAt })
   res.status(201).json({ ok: true, inviterId, personalId })
 })
 
@@ -1265,19 +1411,25 @@ app.get('/api/time-contracts/quote', (req, res) => {
   res.json({ payoutPercent: timePayoutPercent(direction, String(req.query.projectId || '')), autoAdjusted: frontendConfig.autoPayoutEnabled })
 })
 
-app.get('/api/time-contracts', (req, res) => {
+app.get('/api/time-contracts', async (req, res) => {
   if (!frontendConfig.showTimeContracts) return res.status(403).json({ error: '后台已关闭时间合约模块' })
   const personalId = String(req.query.personalId || '')
   if (!validPersonalId(personalId)) return res.status(400).json({ error: '请先注册并绑定个人 ID' })
-  const items = [...predictions.values()].filter(item => item.personalId === personalId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  const stored = await loadPlatformOrders(personalId)
+  const itemsById = new Map((stored || []).filter(row => row.kind === 'contracts').map(row => [row.item.id, row.item]))
+  for (const item of predictions.values()) if (item.personalId === personalId) itemsById.set(item.id, item)
+  const items = [...itemsById.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   res.json({ personalId, balance: virtualBalances.get(personalId) ?? 10000, contracts: items.slice(0, 20).map(publicPrediction) })
 })
 
-app.get('/api/forecasts', (req, res) => {
+app.get('/api/forecasts', async (req, res) => {
   if (!frontendConfig.showPrediction) return res.status(403).json({ error: '后台已关闭预测系统' })
   const personalId = String(req.query.personalId || '')
   if (!validPersonalId(personalId)) return res.status(400).json({ error: '请先注册并绑定个人 ID' })
-  const items = [...forecasts.values()].filter(item => item.personalId === personalId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  const stored = await loadPlatformOrders(personalId)
+  const itemsById = new Map((stored || []).filter(row => row.kind === 'forecasts').map(row => [row.item.id, row.item]))
+  for (const item of forecasts.values()) if (item.personalId === personalId) itemsById.set(item.id, item)
+  const items = [...itemsById.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   res.json({ personalId, balance: virtualBalances.get(personalId) ?? 10000, forecasts: items.slice(0, 50) })
 })
 
@@ -1322,13 +1474,21 @@ app.post('/api/forecasts', async (req, res) => {
   forecasts.set(key, item)
   const forcedResult = getOutcomePolicy('forecasts', personalId)
   if (forcedResult) settleForecast(item, forcedResult)
+  if (!(await persistOrderOrRespond(res, 'forecasts', item))) {
+    if (existing) forecasts.set(key, existing)
+    else { forecasts.delete(key); virtualBalances.set(personalId, balance) }
+    return
+  }
   res.status(existing ? 200 : 201).json({ forecast: item, balance: virtualBalances.get(personalId) ?? 10000 })
 })
 
-app.get('/api/etf-orders', (req, res) => {
+app.get('/api/etf-orders', async (req, res) => {
   const personalId = String(req.query.personalId || '')
   if (!validPersonalId(personalId)) return res.status(400).json({ error: '请先注册并绑定个人 ID' })
-  const orders = [...etfOrders.values()].filter(item => item.personalId === personalId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  const stored = await loadPlatformOrders(personalId)
+  const ordersById = new Map((stored || []).filter(row => row.kind === 'etfOrders').map(row => [row.item.id, row.item]))
+  for (const item of etfOrders.values()) if (item.personalId === personalId) ordersById.set(item.id, item)
+  const orders = [...ordersById.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   res.json({ personalId, balance: etfBalances.get(personalId) ?? 25000, orders: orders.slice(0, 30) })
 })
 
@@ -1360,6 +1520,11 @@ app.post('/api/etf-orders', async (req, res) => {
   etfOrders.set(item.id, item)
   const forcedResult = getOutcomePolicy('etfOrders', personalId)
   if (forcedResult) settleEtfOrder(item, forcedResult)
+  if (!(await persistOrderOrRespond(res, 'etfOrders', item))) {
+    etfOrders.delete(item.id)
+    etfBalances.set(personalId, balance)
+    return
+  }
   res.status(201).json({ order: item, balance: etfBalances.get(personalId) ?? 25000 })
 })
 
@@ -1387,6 +1552,11 @@ app.post('/api/time-contracts', async (req, res) => {
     createdAt: new Date().toISOString(), settledAt: null,
   }
   predictions.set(item.id, item)
+  if (!(await persistOrderOrRespond(res, 'contracts', item))) {
+    predictions.delete(item.id)
+    virtualBalances.set(personalId, balance)
+    return
+  }
   const settlementTimer = setTimeout(async () => {
     contractSettlementTimers.delete(item.id)
     if (item.status !== 'pending') return

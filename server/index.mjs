@@ -406,6 +406,27 @@ function safeSubmission(item) {
 const validPersonalId = value => typeof value === 'string' && /^NST-[A-Z0-9]{8}$/.test(value)
 const latestKyc = personalId => [...submissions.values()].filter(row => row.personalId === personalId).sort((a, b) => b.submittedAt.localeCompare(a.submittedAt))[0]
 const rounded = value => Math.round(value * 100) / 100
+const formatTurnover = value => {
+  if (!Number.isFinite(value) || value <= 0) return '—'
+  if (value >= 1e9) return `$${(value / 1e9).toFixed(2)}B`
+  if (value >= 1e6) return `$${(value / 1e6).toFixed(1)}M`
+  return `$${Math.round(value / 1e3)}K`
+}
+function simulatedMarketQuote(asset) {
+  const dateKey = new Date().toISOString().slice(0, 10)
+  const seed = createHash('sha256').update(`${asset.symbol}:${dateKey}`).digest().readUInt32BE(0)
+  let change = (seed % 701 - 350) / 100
+  if (Math.abs(change) < 0.15) change = seed % 2 ? 0.22 : -0.22
+  const baseline = Number(asset.last) > 0 ? Number(asset.last) : 100
+  const turnoverBase = ['SPY', 'QQQ'].includes(asset.symbol) ? 4e9 : ['IWM', 'DIA'].includes(asset.symbol) ? 500e6 : ['TQQQ', 'SQQQ', 'SOXL', 'UPRO', 'SSO', 'SDS', 'QLD', 'QID'].includes(asset.symbol) ? 600e6 : asset.type?.includes('ETF') ? 90e6 : 180e6
+  const turnover = turnoverBase * (0.55 + (seed % 1000) / 1000)
+  return {
+    last: rounded(baseline * (1 + change / 100)),
+    change: rounded(change),
+    volume: formatTurnover(turnover),
+    updatedAt: new Date().toISOString(),
+  }
+}
 const addressMask = address => address.length < 12 ? '••••' : `${address.slice(0, 6)}••••${address.slice(-5)}`
 const walletBalanceKey = (personalId, currency = 'USDT') => `${personalId}:${currency}`
 function safeTransaction(item) {
@@ -654,7 +675,8 @@ async function syncMarketQuotes() {
         const quote = await response.json()
         const last = Number(quote.close)
         if (!Number.isFinite(last) || last <= 0) return null
-        return { symbol, last: rounded(last), change: rounded(Number(quote.percent_change) || 0), volume: Number.isFinite(Number(quote.volume)) ? `${Number(quote.volume).toLocaleString('en-US')} 股` : '—', updatedAt: quote.timestamp ? new Date(Number(quote.timestamp) * 1000).toISOString() : new Date().toISOString() }
+        const turnover = Number(quote.volume) * last
+        return { symbol, last: rounded(last), change: rounded(Number(quote.percent_change) || 0), volume: formatTurnover(turnover), updatedAt: quote.timestamp ? new Date(Number(quote.timestamp) * 1000).toISOString() : new Date().toISOString() }
       }))
       for (const quote of results) if (quote) quotes[quote.symbol] = quote
       if (!Object.keys(quotes).length) throw new Error('行情源没有返回可用标的报价')
@@ -684,9 +706,11 @@ async function syncMarketQuotes() {
       if (!Number.isFinite(last) || last <= 0) continue
       const change = Number.isFinite(previousClose) && previousClose > 0 ? ((last - previousClose) / previousClose) * 100 : 0
       const asset = frontendConfig.marketAssets.find(item => item.symbol === ticker.ticker)
+      const shareVolume = Number(ticker.day?.v)
+      const averagePrice = Number(ticker.day?.vw)
       quotes[ticker.ticker] = {
         last: rounded(last), change: rounded(change),
-        volume: Number.isFinite(Number(ticker.day?.v)) ? `${Number(ticker.day.v).toLocaleString('en-US')} 股` : asset?.volume || '—',
+        volume: Number.isFinite(shareVolume) && shareVolume > 0 ? formatTurnover(shareVolume * (Number.isFinite(averagePrice) && averagePrice > 0 ? averagePrice : last)) : asset?.volume || '—',
         updatedAt: Number.isFinite(Number(ticker.updated)) ? new Date(Number(ticker.updated) / 1e6).toISOString() : new Date().toISOString(),
       }
     }
@@ -704,8 +728,9 @@ app.get('/api/public-config', async (_req, res) => {
   const config = {
     ...frontendConfig,
     marketAssets: frontendConfig.marketAssets.map(asset => {
-      const quote = marketData.quotes[asset.symbol]
-      return quote ? { ...asset, last: quote.last, change: quote.change, volume: quote.volume, quoteSource: marketData.provider } : { ...asset, quoteSource: 'SIM' }
+      const liveQuote = marketData.quotes[asset.symbol]
+      const quote = liveQuote || simulatedMarketQuote(asset)
+      return { ...asset, last: quote.last, change: quote.change, volume: quote.volume, quoteSource: liveQuote ? marketData.provider : 'SIM' }
     }),
   }
   const { quotes: _quotes, ...marketDataStatus } = marketData

@@ -2,6 +2,10 @@
   "version": 2,
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
+  "rewrites": [
+    { "source": "/admin", "destination": "/" },
+    { "source": "/admin/:path*", "destination": "/" }
+  ],
   "functions": {
     "api/[...path].mjs": {
       "maxDuration": 30

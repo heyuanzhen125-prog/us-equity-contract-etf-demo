@@ -373,19 +373,17 @@ export default function App() {
     if (authPassword !== authPasswordConfirm) { notify('两次输入的密码不一致'); return }
     if (!acceptDemoTerms) { notify('请先确认模拟账户使用说明'); return }
     const id = createPersonalId()
-    if (referralCode) {
-      try {
-        const response = await fetch(referralCode.startsWith('NST-') ? '/api/referrals/register' : '/api/admin/agents/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, personalId: id, referralCode }),
-        })
-        const result = await response.json()
-        if (!response.ok) throw new Error(result.error || '代理邀请登记失败')
-      } catch (error) {
-        notify(error instanceof Error ? error.message : '代理邀请服务暂不可用，请稍后重试')
-        return
-      }
+    try {
+      const response = await fetch('/api/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, personalId: id, referralCode }),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || '账户登记失败')
+    } catch (error) {
+      notify(error instanceof Error ? error.message : '账户登记服务暂不可用，请稍后重试')
+      return
     }
     localStorage.setItem('northstar.demo.registeredEmail', email)
     localStorage.setItem('northstar.demo.personalId', id)

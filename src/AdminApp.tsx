@@ -8,10 +8,11 @@ import AdminFrontSettingsView from './AdminFrontSettingsView'
 import AdminProjectsView from './AdminProjectsView'
 import AdminPredictionPreviewView from './AdminPredictionPreviewView'
 import AdminWalletView from './AdminWalletView'
+import AdminMembersView from './AdminMembersView'
 import './admin.css'
 
 type Status = 'pending' | 'approved' | 'rejected'
-type AdminView = 'kyc' | 'wallet' | 'deposits' | 'projects' | 'prediction-preview' | 'front-config' | 'agents' | 'permissions'
+type AdminView = 'kyc' | 'members' | 'wallet' | 'deposits' | 'projects' | 'prediction-preview' | 'front-config' | 'agents' | 'permissions'
 type AdminRole = { id: string; name: string; permissions: string[] }
 type Submission = {
   id: string; personalId: string; email: string; legalName: string; country: string; birthDate: string
@@ -24,6 +25,7 @@ const countryName: Record<string, string> = { US: '美国', CN: '中国', VN: '�
 const docName: Record<string, string> = { passport: '护照', 'national-id': '身份证', license: '驾驶证' }
 const viewInfo: Record<AdminView, { name: string; icon: typeof BadgeCheck }> = {
   kyc: { name: 'KYC 身份审核', icon: BadgeCheck },
+  members: { name: '成员列表', icon: Users },
   wallet: { name: 'USDT 资金流水', icon: Coins },
   deposits: { name: 'USDT / USDC 充值配置', icon: Coins },
   projects: { name: '项目与曲线', icon: Activity },
@@ -233,6 +235,7 @@ export default function AdminApp() {
     <main className="admin-main">
       <header className="admin-topbar"><div><span>运营管理</span><ChevronRight size={14}/><b>{currentLabel}</b></div>{adminView === 'kyc' && <button onClick={() => void refresh()} disabled={busy}><RefreshCw size={14} className={busy ? 'spinning' : ''}/>刷新队列</button>}</header>
       {adminView === 'permissions' && <AdminAccessView adminKey={adminKey}/>}
+      {adminView === 'members' && <AdminMembersView adminKey={adminKey}/>}
       {adminView === 'agents' && <AdminAgentsView adminKey={adminKey}/>}
       {adminView === 'front-config' && <AdminFrontSettingsView adminKey={adminKey}/>}
       {adminView === 'deposits' && <AdminDepositSettingsApp adminKey={adminKey}/>}

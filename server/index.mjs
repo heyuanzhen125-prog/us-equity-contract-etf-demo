@@ -26,11 +26,15 @@ const adminSessions = new Map()
 const agents = new Map()
 const agentRegistrations = new Map()
 const userReferralRegistrations = new Map()
+// Demo account directory shared by the public registration flow and admin member list.
+// This in-memory store is suitable only for the current demo runtime; use a durable DB for production.
+const userAccounts = new Map()
 let exchangeEventsCache = { expiresAt: 0, payload: null }
 const syncedExchangeEvents = new Map()
 let marketQuotesCache = { expiresAt: 0, payload: null }
 const permissionModules = [
   { id: 'kyc', name: 'KYC 身份审核' },
+  { id: 'members', name: '成员列表' },
   { id: 'wallet', name: 'USDT 资金流水' },
   { id: 'deposits', name: 'USDT / USDC 充值配置' },
   { id: 'projects', name: '项目与曲线' },
@@ -1163,7 +1167,74 @@ app.post('/api/admin/agents/register', (req, res) => {
   const member = { personalId, name: email }
   agent.members.push(member)
   agentRegistrations.set(personalId, { email, agentId: agent.id, createdAt: new Date().toISOString() })
+  userAccounts.set(personalId, { personalId, email, agentId: agent.id, createdAt: new Date().toISOString() })
   res.status(201).json({ ok: true, agent: { id: agent.id, code: agent.code, name: agent.name }, member })
+})
+
+// Public demo registration records account metadata only. Passwords are never accepted or stored.
+app.post('/api/register', (req, res) => {
+  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : ''
+  const personalId = typeof req.body?.personalId === 'string' ? req.body.personalId.trim().toUpperCase() : ''
+  const referralCode = typeof req.body?.referralCode === 'string' ? req.body.referralCode.trim().toUpperCase() : ''
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || !validPersonalId(personalId)) {
+    return res.status(400).json({ error: '注册资料无效' })
+  }
+  if (userAccounts.has(personalId) || [...userAccounts.values()].some(item => item.email === email)) {
+    return res.status(409).json({ error: '该邮箱或个人 ID 已注册' })
+  }
+  let inviterId = ''
+  let agent = null
+  if (referralCode.startsWith('NST-')) {
+    inviterId = referralCode
+    if (!validPersonalId(inviterId) || inviterId === personalId) return res.status(400).json({ error: '邀请链接无效' })
+  } else if (referralCode.startsWith('AG-')) {
+    agent = [...agents.values()].find(item => item.code === referralCode && item.active)
+    if (!agent) return res.status(404).json({ error: '代理邀请链接无效或代理已停用' })
+  } else if (referralCode) {
+    return res.status(400).json({ error: '邀请链接无效' })
+  }
+  const createdAt = new Date().toISOString()
+  const account = { personalId, email, createdAt, inviterId, agentId: agent?.id || '' }
+  userAccounts.set(personalId, account)
+  if (inviterId) userReferralRegistrations.set(personalId, { email, inviterId, createdAt })
+  if (agent) {
+    agent.members.push({ personalId, name: email })
+    agentRegistrations.set(personalId, { email, agentId: agent.id, createdAt })
+  }
+  res.status(201).json({ ok: true, personalId })
+})
+
+app.get('/api/admin/members', requirePermission('members'), (_req, res) => {
+  const members = new Map(userAccounts)
+  for (const [personalId, item] of userReferralRegistrations.entries()) {
+    if (!members.has(personalId)) members.set(personalId, { personalId, email: item.email, createdAt: item.createdAt, inviterId: item.inviterId })
+  }
+  for (const item of agentRegistrations.entries()) {
+    const [personalId, registration] = item
+    const member = members.get(personalId) || { personalId, email: registration.email, createdAt: registration.createdAt }
+    member.agentId = registration.agentId
+    members.set(personalId, member)
+  }
+  for (const submission of submissions.values()) {
+    const member = members.get(submission.personalId) || { personalId: submission.personalId, email: submission.email, createdAt: submission.submittedAt }
+    member.email ||= submission.email
+    if (!member.kycStatus || submission.submittedAt > (member.kycSubmittedAt || '')) {
+      member.kycStatus = submission.status === 'approved' ? 'verified' : submission.status === 'rejected' ? 'rejected' : 'pending'
+      member.kycSubmittedAt = submission.submittedAt
+    }
+    members.set(member.personalId, member)
+  }
+  const rows = [...members.values()].map(member => ({
+    personalId: member.personalId,
+    email: member.email || '',
+    createdAt: member.createdAt,
+    inviterId: member.inviterId || '',
+    agentId: member.agentId || '',
+    kycStatus: member.kycStatus || 'unverified',
+    walletTransactions: [...walletTransactions.values()].filter(item => item.personalId === member.personalId).length,
+    orderCount: [...etfOrders.values()].filter(item => item.personalId === member.personalId).length + [...predictions.values()].filter(item => item.personalId === member.personalId).length + [...forecasts.values()].filter(item => item.personalId === member.personalId).length,
+  })).sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+  res.json({ members: rows, persistence: 'ephemeral-demo' })
 })
 
 app.get('/api/referrals/:personalId', (req, res) => {

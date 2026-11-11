@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { Activity, ArrowUpRight, Check, CircleHelp, Clock3, LockKeyhole, TrendingUp } from 'lucide-react'
+import { Activity, ArrowUpRight, Check, CircleHelp, Clock3, ExternalLink, LockKeyhole, TrendingUp } from 'lucide-react'
 import { useVisiblePolling } from './useVisiblePolling'
 
 type Forecast = { id: string; personalId: string; eventId: string; probability: number; rationale: string; stake: number; rewardPercent: number; status: 'pending' | 'won' | 'lost'; result: 'won' | 'lost' | null; payout: number | null; profit: number | null; updatedAt: string; settledAt: string | null }
 type Event = { id: string; category: string; question: string; description: string; consensus: number; marketProbability?: number | null; predictionCount?: number; horizon: string; volume: string; rewardPercent: number }
+type ExchangeEvent = { id: string; exchange: string; category: string; question: string; probability: number; volume: number; endTime: string | null; url: string }
 
 
 export default function PredictionMarketPanel({ personalId, onRegister, notify, events, title, subtitle }: { personalId: string; onRegister: () => void; notify: (message: string) => void; events: Event[]; title: string; subtitle: string }) {
@@ -14,6 +15,10 @@ export default function PredictionMarketPanel({ personalId, onRegister, notify, 
   const [balance, setBalance] = useState(10000)
   const [saving, setSaving] = useState<string | null>(null)
   const [category, setCategory] = useState('全部')
+  const [exchangeEvents, setExchangeEvents] = useState<ExchangeEvent[]>([])
+  const [exchangeSources, setExchangeSources] = useState<Record<string, boolean>>({})
+  const [exchangeUpdatedAt, setExchangeUpdatedAt] = useState('')
+  const [exchangeUnavailable, setExchangeUnavailable] = useState(false)
   const initialized = useRef(false)
   const categories = ['全部', ...new Set(events.map(event => event.category))]
   const visible = category === '全部' ? events : events.filter(event => event.category === category)
@@ -24,6 +29,19 @@ export default function PredictionMarketPanel({ personalId, onRegister, notify, 
     initialized.current = false
     if (!personalId) { setForecasts([]); setBalance(10000) }
   }, [personalId])
+  useVisiblePolling(async signal => {
+    try {
+      const response = await fetch('/api/exchange-events', { signal })
+      if (!response.ok) throw new Error('exchange feed unavailable')
+      const result = await response.json()
+      setExchangeEvents(Array.isArray(result.items) ? result.items : [])
+      setExchangeSources(result.sources || {})
+      setExchangeUpdatedAt(result.updatedAt || '')
+      setExchangeUnavailable(!Object.values(result.sources || {}).some(Boolean))
+    } catch (error) {
+      if (!signal.aborted) { setExchangeUnavailable(true); console.warn('Unable to refresh exchange event feed', error) }
+    }
+  }, 60000, true, [])
   useVisiblePolling(async signal => {
     if (!personalId) return
     try {
@@ -65,6 +83,11 @@ export default function PredictionMarketPanel({ personalId, onRegister, notify, 
     <div className="forecast-intro"><div><div className="forecast-kicker"><Activity size={13}/> FORECAST WORKSPACE</div><h2>{title}</h2><p>{subtitle} 此模块使用虚拟积分，不涉及真实资金。</p></div><div className="forecast-account"><LockKeyhole size={14}/><span>{personalId ? `绑定个人 ID · ${personalId}` : '注册后可保存个人预测'}</span></div></div>
     <div className="forecast-disclaimer"><CircleHelp size={15}/><span>模拟预测市场：概率由 Manifold CPMM 做市公式按用户虚拟积分投入动态计算；概率低于 50% 记为 NO，高于或等于 50% 记为 YES。结果及演示收益仍按后台规则处理；积分不具备现金价值。</span></div>
     {personalId && <div className="forecast-balance">虚拟积分余额 <b>{balance.toLocaleString('en-US')} PTS</b></div>}
+    <section className="exchange-feed">
+      <div className="exchange-feed-heading"><div><span className="forecast-kicker"><TrendingUp size={13}/> EXCHANGE EVENT FEED</span><h3>交易所事件合约行情</h3><p>公开只读参考行情；不会创建交易所订单，也不影响下方平台模拟预测。</p></div><span className="exchange-feed-status"><i className={exchangeUnavailable?'offline':''}/>{exchangeUpdatedAt?`行情更新 ${new Date(exchangeUpdatedAt).toLocaleTimeString()}`:'正在读取公开行情'}</span></div>
+      <div className="exchange-source-row">{['Kalshi','Polymarket'].map(source=><span className={`exchange-source ${exchangeSources[source]?'online':'offline'}`} key={source}>{source} · {exchangeSources[source]?'已连接':'暂不可用'}</span>)}</div>
+      {exchangeEvents.length ? <div className="exchange-feed-list">{exchangeEvents.slice(0,12).map(item=><article className="exchange-feed-item" key={item.id}><div className="exchange-feed-question"><span>{item.exchange} · {item.category}</span><b>{item.question}</b><small>{item.endTime?`截止 ${new Date(item.endTime).toLocaleString()}`:'开放中'} · 24h 成交量 {item.volume.toLocaleString()}</small></div><strong>{item.probability}%</strong><a href={item.url} target="_blank" rel="noreferrer" aria-label={`打开${item.exchange}市场`}><ExternalLink size={14}/></a></article>)}</div> : <div className="exchange-feed-empty">{exchangeUnavailable?'当前交易所公开接口不可用，请稍后刷新；本地模拟预测仍可正常使用。':'正在载入交易所市场列表…'}</div>}
+    </section>
     <div className="forecast-toolbar"><div className="forecast-filters">{categories.map(item => <button className={category===item?'selected':''} key={item} onClick={()=>setCategory(item)}>{item}</button>)}</div><span><Clock3 size={12}/> 更新于本地演示</span></div>
     {events.length===0?<div className="forecast-empty">后台尚未发布预测事件，请在「前台配置」中添加。</div>:<div className="forecast-grid">{visible.map(event => { const value = values[event.id] ?? event.consensus; const saved = forecasts.find(row => row.eventId === event.id); const predictionCount = event.predictionCount ?? 0; const marketProbability = event.marketProbability ?? event.consensus; return <article className="forecast-card" key={event.id}>
       <div className="forecast-card-top"><span>{event.category}</span><small><TrendingUp size={12}/> {predictionCount ? `${predictionCount} 人已预测` : '后台起始概率'}</small></div><h3>{event.question}</h3><p>{event.description}</p><div className="forecast-reward"><span>演示收益比例</span><b>+{event.rewardPercent}%</b></div><div className="forecast-progress"><div><span>{predictionCount ? 'CPMM 市场概率' : '后台起始概率'}</span><b>{marketProbability}%</b></div><div className="forecast-track"><i style={{ width: `${marketProbability}%` }}/></div></div>

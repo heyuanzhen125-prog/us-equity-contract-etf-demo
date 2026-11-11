@@ -22,6 +22,7 @@ const staffUsers = new Map()
 const adminSessions = new Map()
 const agents = new Map()
 const agentRegistrations = new Map()
+let exchangeEventsCache = { expiresAt: 0, payload: null }
 const permissionModules = [
   { id: 'kyc', name: 'KYC 身份审核' },
   { id: 'wallet', name: 'USDT 资金流水' },
@@ -514,6 +515,46 @@ function publicForecastEvents() {
 }
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'northstar-local-api' }))
+// Read-only exchange reference feed. Each adapter normalizes venue data into
+// the same event/market shape; local demo predictions remain independent.
+app.get('/api/exchange-events', async (_req, res) => {
+  if (exchangeEventsCache.payload && exchangeEventsCache.expiresAt > Date.now()) return res.json(exchangeEventsCache.payload)
+  const settled = []
+  const fetchJson = async (url) => {
+    const response = await fetch(url, { signal: AbortSignal.timeout(8000), headers: { accept: 'application/json' } })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    return response.json()
+  }
+  const adapters = [
+    async () => {
+      const data = await fetchJson('https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=40&order=volume24hr&ascending=false')
+      const rows = Array.isArray(data) ? data : data.markets || []
+      return rows.map(market => {
+        let outcomes = []; let prices = []
+        try { outcomes = Array.isArray(market.outcomes) ? market.outcomes : JSON.parse(market.outcomes || '[]') } catch {}
+        try { prices = Array.isArray(market.outcomePrices) ? market.outcomePrices : JSON.parse(market.outcomePrices || '[]') } catch {}
+        const yesIndex = outcomes.findIndex(value => /^yes$/i.test(String(value)))
+        const probability = Number(prices[yesIndex >= 0 ? yesIndex : 0])
+        return { id: `polymarket:${market.id}`, exchange: 'Polymarket', category: market.category || '事件市场', question: market.question || market.title || '未命名市场', probability: Number.isFinite(probability) ? Math.round(probability * 100) : null, volume: Number(market.volume24hr || market.volume || 0), endTime: market.endDate || null, url: market.slug ? `https://polymarket.com/event/${market.slug}` : 'https://polymarket.com' }
+      }).filter(item => item.question && item.probability !== null)
+    },
+    async () => {
+      const data = await fetchJson('https://api.elections.kalshi.com/trade-api/v2/markets?limit=40&status=open')
+      return (data.markets || []).map(market => {
+        const yes = Number(market.yes_ask_dollars ?? market.yes_bid_dollars ?? (Number(market.yes_ask ?? market.last_price ?? 0) / 100))
+        return { id: `kalshi:${market.ticker}`, exchange: 'Kalshi', category: market.category || '事件市场', question: market.title || market.subtitle || market.ticker, probability: Number.isFinite(yes) ? Math.round(yes * 100) : null, volume: Number(market.volume_24h || market.volume || 0), endTime: market.close_time || market.expiration_time || null, url: `https://kalshi.com/markets/${market.ticker}` }
+      }).filter(item => item.question && item.probability !== null)
+    },
+  ]
+  await Promise.all(adapters.map(async adapter => {
+    try { settled.push({ ok: true, items: await adapter() }) }
+    catch (error) { settled.push({ ok: false, error: error instanceof Error ? error.message : 'provider unavailable', items: [] }) }
+  }))
+  const items = settled.flatMap(result => result.items).sort((a, b) => b.volume - a.volume).slice(0, 60)
+  const payload = { items, sources: { Polymarket: settled[0]?.ok || false, Kalshi: settled[1]?.ok || false }, updatedAt: new Date().toISOString(), readOnly: true }
+  exchangeEventsCache = { payload, expiresAt: Date.now() + 30000 }
+  res.json(payload)
+})
 app.get('/api/public-config', (_req, res) => res.json({ config: frontendConfig, forecastEvents: publicForecastEvents() }))
 app.get('/api/forecast-events', (_req, res) => res.json({ events: publicForecastEvents() }))
 app.get('/api/admin/front-config', requirePermission('front-config'), (_req, res) => res.json({ config: frontendConfig, forecastEvents }))

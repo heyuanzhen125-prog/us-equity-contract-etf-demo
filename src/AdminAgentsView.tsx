@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { Pencil, Plus, RefreshCw, Save, Trash2, Users } from 'lucide-react'
+import { Copy, Pencil, Plus, RefreshCw, Save, Trash2, Users } from 'lucide-react'
+import { FRONTEND_SITE_URL } from './siteRouting'
 import './admin-access.css'
 
 type Agent = {
@@ -97,6 +98,17 @@ export default function AdminAgentsView({ adminKey }: { adminKey: string }) {
     }
   }
 
+  const copyInviteLink = async (agent: Agent) => {
+    const url = new URL('/', FRONTEND_SITE_URL || window.location.origin)
+    url.searchParams.set('ref', agent.code)
+    try {
+      await navigator.clipboard.writeText(url.toString())
+      setNotice(`已复制 ${agent.name} 的前台邀请链接。`)
+    } catch {
+      setError('复制失败，请检查浏览器剪贴板权限。')
+    }
+  }
+
   return <div className="admin-content access-view">
     <div className="admin-title-row"><div><div className="admin-eyebrow"><i/> 渠道运营</div><h1>代理系统</h1><p>维护代理账号、下级用户及返佣比例。</p></div><button className="access-refresh" onClick={() => void refresh()} disabled={busy}><RefreshCw size={13}/>刷新</button></div>
     <div className="access-note access-warning"><Users size={16}/><span><b>佣金自动计算未启用：</b>当前没有接入真实入金数据源。下方比例仅为配置，不会根据演示充值计算佣金，也不会产生真实结算或提现。</span></div>
@@ -119,6 +131,7 @@ export default function AdminAgentsView({ adminKey }: { adminKey: string }) {
         {agents.length ? <div className="agent-list">{agents.map(agent => <article className="agent-row" key={agent.id}>
           <div className="agent-row-main"><div className="agent-avatar">{agent.name.slice(0, 1)}</div><div><b>{agent.name}</b><small>{agent.code}{agent.contact ? ` · ${agent.contact}` : ''}</small></div><span className={`agent-status ${agent.active ? 'on' : ''}`}>{agent.active ? '启用' : '停用'}</span></div>
           <div className="agent-meta"><span>下级用户 <b>{agent.members.length}</b></span><span>配置返佣比例 <b>{agent.commissionRate}%</b></span></div>
+          <div className="agent-invite-link"><span>前台注册链接</span><code>{new URL(`/?ref=${encodeURIComponent(agent.code)}`, FRONTEND_SITE_URL || window.location.origin).toString()}</code><button onClick={() => void copyInviteLink(agent)} disabled={busy || !agent.active}><Copy size={13}/>复制邀请链接</button></div>
           <div className="agent-members">{agent.members.length ? agent.members.map(member => <span key={member.personalId}>{member.name} <code>{member.personalId}</code></span>) : <span>尚未关联下级用户</span>}</div>
           <div className="agent-actions"><button onClick={() => edit(agent)} disabled={busy}><Pencil size={13}/>编辑</button><button className="danger" onClick={() => void remove(agent)} disabled={busy}><Trash2 size={13}/>删除</button></div>
         </article>)}</div> : <div className="access-empty"><Plus size={18}/>还没有代理，使用左侧表单添加。</div>}

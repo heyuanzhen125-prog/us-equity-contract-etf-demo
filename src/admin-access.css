@@ -55,6 +55,10 @@
 .agent-status.on{background:#1b3328;color:#8bd5a8}
 .agent-meta{display:flex;gap:16px;margin:11px 0 8px;color:#828b98;font-size:9px}
 .agent-meta b{margin-left:4px;color:#c9ccd4;font-weight:600}
+.agent-invite-link{display:flex;align-items:center;gap:8px;margin:8px 0;padding:8px;border:1px solid #29313d;border-radius:6px;background:#121720;color:#828b98;font-size:9px}
+.agent-invite-link code{min-width:0;flex:1;overflow:hidden;color:#b7afd9;text-overflow:ellipsis;white-space:nowrap}
+.agent-invite-link button{display:inline-flex;flex:none;align-items:center;gap:5px;padding:5px 7px;border:1px solid #38334f;border-radius:5px;background:#211e31;color:#c4b9f1;font-size:9px}
+.agent-invite-link button:disabled{opacity:.45}
 .agent-members{display:flex;flex-wrap:wrap;gap:5px}
 .agent-members span{display:inline-flex;flex-wrap:wrap;gap:5px;padding:5px 7px;border:1px solid #29313d;border-radius:5px;color:#a9b0bb;font-size:8px}
 .agent-members code{color:#827cae}
@@ -64,6 +68,6 @@
 .commission-placeholder{display:grid;gap:5px;margin:12px;padding:11px;border:1px dashed #49402b;border-radius:7px;background:#211f18;color:#bcb08b;font-size:9px;line-height:1.5}
 .commission-placeholder b{color:#e0cd88}
 @media(max-width:1050px){.agent-layout{grid-template-columns:1fr}.access-create-user{grid-template-columns:1fr 1fr}.access-create-user .admin-primary{min-height:32px}}
-@media(max-width:700px){.access-roles{grid-template-columns:1fr}.access-user{grid-template-columns:1fr 1fr}.access-user-name{grid-column:span 2}.access-create-user{grid-template-columns:1fr}.access-panel>header{align-items:flex-start;flex-direction:column}.access-new-role{width:100%}.access-new-role input{flex:1}}
+@media(max-width:700px){.access-roles{grid-template-columns:1fr}.access-user{grid-template-columns:1fr 1fr}.access-user-name{grid-column:span 2}.access-create-user{grid-template-columns:1fr}.access-panel>header{align-items:flex-start;flex-direction:column}.access-new-role{width:100%}.access-new-role input{flex:1}.agent-invite-link{flex-wrap:wrap}.agent-invite-link code{flex-basis:100%;order:2}.agent-invite-link button{margin-left:auto}}
 .access-login-divider{margin:17px 0 12px;border-top:1px solid #292f3a;padding-top:13px;color:#7f8794;text-align:center;font-size:9px}
 .access-logout-link{width:100%;border:0;background:transparent;cursor:pointer}

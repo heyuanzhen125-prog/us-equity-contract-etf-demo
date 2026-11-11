@@ -20,6 +20,7 @@ const outcomePolicies = {
 const staffUsers = new Map()
 const adminSessions = new Map()
 const agents = new Map()
+const agentRegistrations = new Map()
 const permissionModules = [
   { id: 'kyc', name: 'KYC 身份审核' },
   { id: 'wallet', name: 'USDT 资金流水' },
@@ -806,6 +807,29 @@ app.delete('/api/admin/agents/:id', requirePermission('agents'), (req, res) => {
   if (!agents.has(req.params.id)) return res.status(404).json({ error: '未找到代理' })
   agents.delete(req.params.id)
   res.json({ ok: true })
+})
+
+// Public referral registration endpoint. It intentionally lives under the same
+// Vercel function route as admin agent management so both paths share agent state.
+app.post('/api/admin/agents/register', (req, res) => {
+  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : ''
+  const personalId = typeof req.body?.personalId === 'string' ? req.body.personalId.trim().toUpperCase() : ''
+  const code = typeof req.body?.referralCode === 'string' ? req.body.referralCode.trim().toUpperCase() : ''
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || !validPersonalId(personalId) || !/^AG-[A-Z0-9-]{2,24}$/.test(code)) {
+    return res.status(400).json({ error: '注册链接或注册资料无效，请重新打开代理邀请链接' })
+  }
+  if (agentRegistrations.has(personalId) || [...agentRegistrations.values()].some(registration => registration.email === email)) {
+    return res.status(409).json({ error: '该演示账户已登记，请勿重复注册' })
+  }
+  const agent = [...agents.values()].find(item => item.code === code && item.active)
+  if (!agent) return res.status(404).json({ error: '代理邀请链接无效或代理已停用' })
+  if ([...agents.values()].some(item => item.members.some(member => member.personalId === personalId))) {
+    return res.status(409).json({ error: '该个人 ID 已关联其他代理' })
+  }
+  const member = { personalId, name: email }
+  agent.members.push(member)
+  agentRegistrations.set(personalId, { email, agentId: agent.id, createdAt: new Date().toISOString() })
+  res.status(201).json({ ok: true, agent: { id: agent.id, code: agent.code, name: agent.name }, member })
 })
 
 app.get('/api/time-contracts/quote', (req, res) => {

@@ -74,6 +74,14 @@ export default function App() {
   const [demoProjects, setDemoProjects] = useState<DemoProject[]>([])
   const [authOpen, setAuthOpen] = useState(false)
   const [registeredEmail, setRegisteredEmail] = useState(() => localStorage.getItem('northstar.demo.registeredEmail') || '')
+  const [referralCode, setReferralCode] = useState(() => {
+    const fromUrl = new URLSearchParams(window.location.search).get('ref')
+    return (fromUrl || localStorage.getItem('northstar.demo.pendingReferral') || '').trim().toUpperCase()
+  })
+  useEffect(() => {
+    if (referralCode) localStorage.setItem('northstar.demo.pendingReferral', referralCode)
+    else localStorage.removeItem('northstar.demo.pendingReferral')
+  }, [referralCode])
   const [personalId, setPersonalId] = useState(() => {
     const savedId = localStorage.getItem('northstar.demo.personalId')
     if (savedId) return savedId
@@ -300,14 +308,29 @@ export default function App() {
       notify(error instanceof Error ? error.message : '后台服务暂不可用，请稍后再试')
     }
   }
-  const registerAccount = (event: FormEvent<HTMLFormElement>) => {
+  const registerAccount = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const email = new FormData(event.currentTarget).get('email')?.toString().trim().toLowerCase() || ''
     if (authPassword !== authPasswordConfirm) { notify('两次输入的密码不一致'); return }
     if (!acceptDemoTerms) { notify('请先确认模拟账户使用说明'); return }
     const id = createPersonalId()
+    if (referralCode) {
+      try {
+        const response = await fetch('/api/admin/agents/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, personalId: id, referralCode }),
+        })
+        const result = await response.json()
+        if (!response.ok) throw new Error(result.error || '代理邀请登记失败')
+      } catch (error) {
+        notify(error instanceof Error ? error.message : '代理邀请服务暂不可用，请稍后重试')
+        return
+      }
+    }
     localStorage.setItem('northstar.demo.registeredEmail', email)
     localStorage.setItem('northstar.demo.personalId', id)
+    localStorage.removeItem('northstar.demo.pendingReferral')
     setRegisteredEmail(email)
     setPersonalId(id)
     const continueToDeposit = authForDeposit
@@ -317,7 +340,8 @@ export default function App() {
     setAuthPasswordConfirm('')
     setAcceptDemoTerms(false)
     if (continueToDeposit) { setKycForDeposit(true); setKycOpen(true) }
-    notify(`账户已创建并绑定个人 ID：${id}`)
+    notify(referralCode ? `账户已创建并绑定代理邀请与个人 ID：${id}` : `账户已创建并绑定个人 ID：${id}`)
+    if (referralCode) setReferralCode('')
   }
   const kycStatusLabel = kycStatus === 'verified' ? '已认证' : kycStatus === 'pending' ? '审核中' : kycStatus === 'rejected' ? '需补充' : '未认证'
   const chartRange = selected.last * 0.035

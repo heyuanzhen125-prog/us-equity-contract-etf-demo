@@ -203,7 +203,7 @@ export default function AdminApp() {
       <label>密码</label><div className="admin-key-input"><KeyRound size={15}/><input value={password} onChange={event => setPassword(event.target.value)} type="password" autoComplete="current-password" placeholder="后台人员密码"/></div>
       <button className="admin-primary" disabled={busy}>{busy ? '正在验证…' : '登录后台'}</button>
       {error && <div className="admin-error"><CircleAlert size={14}/>{error}</div>}
-      <div className="admin-login-note"><ShieldCheck size={13}/> 本地超级管理员主密钥默认值：<code>local-demo-admin</code></div>
+      <div className="admin-login-note"><ShieldCheck size={13}/> 公网后台使用部署环境中的超级管理员主密钥；本地演示默认值仅适用于本机运行。</div>
       <a href={FRONTEND_LINK_HREF} className="admin-back"><ArrowLeft size={13}/>返回前台</a>
     </form>
   </main>

@@ -1,5 +1,5 @@
 import express from 'express'
-import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
 
 const app = express()
 const submissions = new Map()
@@ -144,8 +144,15 @@ app.post('/api/admin/login', (req, res) => {
     }
   }
   if (!session) return res.status(401).json({ error: '后台账号或密码无效' })
-  const token = randomBytes(32).toString('hex')
-  adminSessions.set(token, session)
+  let token
+  if (session.roleId === 'superadmin' && !session.userId) {
+    const payloadText = Buffer.from(JSON.stringify({ roleId: 'superadmin', expiresAt: session.expiresAt })).toString('base64url')
+    const signatureText = createHmac('sha256', adminKey).update(payloadText).digest('base64url')
+    token = `${payloadText}.${signatureText}`
+  } else {
+    token = randomBytes(32).toString('hex')
+    adminSessions.set(token, session)
+  }
   const user = session.userId ? staffUsers.get(session.userId) : null
   res.json({
     token,
@@ -260,6 +267,21 @@ function requireAdmin(req, res, next) {
   if (supplied.length === expected.length && timingSafeEqual(supplied, expected)) {
     req.admin = { roleId: 'superadmin', root: true, token: '' }
     return next()
+  }
+  const [payloadText, signatureText, extra] = suppliedText.split('.')
+  if (payloadText && signatureText && !extra) {
+    const expectedSignature = createHmac('sha256', adminKey).update(payloadText).digest()
+    let payload
+    try {
+      const suppliedSignature = Buffer.from(signatureText, 'base64url')
+      if (suppliedSignature.length === expectedSignature.length && timingSafeEqual(suppliedSignature, expectedSignature)) {
+        payload = JSON.parse(Buffer.from(payloadText, 'base64url').toString('utf8'))
+      }
+    } catch { /* malformed stateless token */ }
+    if (payload?.roleId === 'superadmin' && Number.isFinite(payload.expiresAt) && payload.expiresAt > Date.now()) {
+      req.admin = { roleId: 'superadmin', root: true, token: suppliedText, mustChangePassword: false }
+      return next()
+    }
   }
   const session = adminSessions.get(suppliedText)
   if (!session || session.expiresAt <= Date.now()) {

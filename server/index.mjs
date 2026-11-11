@@ -610,6 +610,35 @@ async function syncExchangeEvents() {
 }
 app.get('/api/exchange-events', async (_req, res) => res.json(await syncExchangeEvents()))
 async function syncMarketQuotes() {
+  // Twelve Data's free Basic tier is for testing/internal use. Keep it
+  // unavailable to public production deployments and cap usage at 8 symbols
+  // refreshed every 15 minutes (8 × 96 = 768 requests/day).
+  const twelveDataKey = process.env.TWELVE_DATA_API_KEY?.trim()
+  if (twelveDataKey && process.env.NODE_ENV !== 'production') {
+    if (marketQuotesCache.payload?.provider === 'Twelve Data' && marketQuotesCache.expiresAt > Date.now()) return marketQuotesCache.payload
+    const symbols = frontendConfig.marketAssets.map(asset => asset.symbol).filter(Boolean).slice(0, 8)
+    const quotes = {}
+    try {
+      const results = await Promise.all(symbols.map(async symbol => {
+        const url = new URL('https://api.twelvedata.com/quote')
+        url.searchParams.set('symbol', symbol)
+        url.searchParams.set('apikey', twelveDataKey)
+        const response = await fetch(url, { signal: AbortSignal.timeout(10000), headers: { accept: 'application/json' } })
+        if (!response.ok) throw new Error(`Twelve Data 返回 HTTP ${response.status}`)
+        const quote = await response.json()
+        const last = Number(quote.close)
+        if (!Number.isFinite(last) || last <= 0) return null
+        return { symbol, last: rounded(last), change: rounded(Number(quote.percent_change) || 0), volume: Number.isFinite(Number(quote.volume)) ? `${Number(quote.volume).toLocaleString('en-US')} 股` : '—', updatedAt: quote.timestamp ? new Date(Number(quote.timestamp) * 1000).toISOString() : new Date().toISOString() }
+      }))
+      for (const quote of results) if (quote) quotes[quote.symbol] = quote
+      if (!Object.keys(quotes).length) throw new Error('行情源没有返回可用标的报价')
+      const payload = { provider: 'Twelve Data', configured: true, connected: true, message: 'Twelve Data 免费测试行情已连接（仅本地开发；最多 8 个标的，每 15 分钟刷新）。', updatedAt: new Date().toISOString(), quotes }
+      marketQuotesCache = { payload, expiresAt: Date.now() + 15 * 60 * 1000 }
+      return payload
+    } catch (error) {
+      return { provider: 'Twelve Data', configured: true, connected: false, message: error instanceof Error ? `Twelve Data 行情连接失败：${error.message}` : 'Twelve Data 行情连接失败；当前显示演示价格。', updatedAt: marketQuotesCache.payload?.updatedAt || null, quotes: marketQuotesCache.payload?.quotes || {} }
+    }
+  }
   const apiKey = process.env.MASSIVE_API_KEY?.trim()
   const publicDisplayLicensed = process.env.MASSIVE_PUBLIC_DISPLAY_LICENSED === 'true'
   if (!apiKey || !publicDisplayLicensed) return { provider: 'SIM', configured: Boolean(apiKey), connected: false, message: !apiKey ? 'Massive 行情 API Key 尚未配置；当前为演示价格。' : '已配置行情 API Key，但公网展示授权未启用；当前为演示价格。', updatedAt: null, quotes: {} }
@@ -650,7 +679,7 @@ app.get('/api/public-config', async (_req, res) => {
     ...frontendConfig,
     marketAssets: frontendConfig.marketAssets.map(asset => {
       const quote = marketData.quotes[asset.symbol]
-      return quote ? { ...asset, last: quote.last, change: quote.change, volume: quote.volume, quoteSource: 'Massive' } : { ...asset, quoteSource: 'SIM' }
+      return quote ? { ...asset, last: quote.last, change: quote.change, volume: quote.volume, quoteSource: marketData.provider } : { ...asset, quoteSource: 'SIM' }
     }),
   }
   const { quotes: _quotes, ...marketDataStatus } = marketData

@@ -3,7 +3,7 @@ import { Activity, ArrowDownLeft, ArrowUpRight, Bell, BookOpen, CandlestickChart
 import SecondsContractPanel from './SecondsContractPanel'
 import PredictionMarketPanel from './PredictionMarketPanel'
 import { useVisiblePolling } from './useVisiblePolling'
-import { ADMIN_LINK_HREF } from './siteRouting'
+import { ADMIN_LINK_HREF, FRONTEND_SITE_URL } from './siteRouting'
 import './etf-orders.css'
 
 type Asset = { symbol: string; name: string; last: number; change: number; volume: string; type: string; color: string; spark: number[] }
@@ -91,6 +91,22 @@ export default function App() {
     localStorage.setItem('northstar.demo.personalId', migratedId)
     return migratedId
   })
+  const [inviteCount, setInviteCount] = useState(0)
+  const personalInviteLink = useMemo(() => {
+    if (!personalId) return ''
+    const url = new URL('/', FRONTEND_SITE_URL || window.location.origin)
+    url.searchParams.set('ref', personalId)
+    return url.toString()
+  }, [personalId])
+  useEffect(() => {
+    if (!personalId) { setInviteCount(0); return }
+    const controller = new AbortController()
+    fetch(`/api/referrals/${encodeURIComponent(personalId)}`, { signal: controller.signal })
+      .then(response => response.ok ? response.json() : null)
+      .then(result => { if (result && Number.isFinite(result.inviteCount)) setInviteCount(result.inviteCount) })
+      .catch(() => {})
+    return () => controller.abort()
+  }, [personalId])
   const [authForDeposit, setAuthForDeposit] = useState(false)
   const [kycStatus, setKycStatus] = useState<KycStatus>('unverified')
   const [kycReason, setKycReason] = useState('')
@@ -318,7 +334,7 @@ export default function App() {
     const id = createPersonalId()
     if (referralCode) {
       try {
-        const response = await fetch('/api/admin/agents/register', {
+        const response = await fetch(referralCode.startsWith('NST-') ? '/api/referrals/register' : '/api/admin/agents/register', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email, personalId: id, referralCode }),
@@ -342,7 +358,7 @@ export default function App() {
     setAuthPasswordConfirm('')
     setAcceptDemoTerms(false)
     if (continueToDeposit) { setKycForDeposit(true); setKycOpen(true) }
-    notify(referralCode ? `账户已创建并绑定代理邀请与个人 ID：${id}` : `账户已创建并绑定个人 ID：${id}`)
+    notify(referralCode ? `账户已创建并记录邀请来源与个人 ID：${id}` : `账户已创建并绑定个人 ID：${id}`)
     if (referralCode) setReferralCode('')
   }
   const kycStatusLabel = kycStatus === 'verified' ? '已认证' : kycStatus === 'pending' ? '审核中' : kycStatus === 'rejected' ? '需补充' : '未认证'
@@ -370,6 +386,7 @@ export default function App() {
           <div className="account-stat-grid"><article><span>USDT 演示余额</span><b>{fmt(walletBalance)} <small>USDT</small></b><button onClick={openDeposit}>充值 / 提现 <ArrowUpRight size={13}/></button></article><article><span>模拟账户净值</span><b>{fmt(etfBalance)} <small>USD</small></b><button onClick={()=>setWorkspaceView('equity-contract')}>查看合约 ETF <ArrowUpRight size={13}/></button></article><article><span>模拟订单</span><b>{etfOrders.length} <small>笔</small></b><button onClick={()=>setWorkspaceView('equity-contract')}>查看订单记录 <ArrowUpRight size={13}/></button></article></div>
           <div className="account-content-grid"><section className="account-panel"><div className="account-panel-heading"><div><b>账户信息</b><small>身份与安全状态</small></div></div><div className="account-info-row"><span>注册邮箱</span><b>{registeredEmail||'尚未注册'}</b></div><div className="account-info-row"><span>个人 ID</span><b className="account-id-value">{personalId||'注册后生成'}{personalId&&<button aria-label="复制个人 ID" onClick={async()=>{try{await navigator.clipboard.writeText(personalId);notify('个人 ID 已复制')}catch{notify(`个人 ID：${personalId}`)}}}><Copy size={13}/></button>}</b></div><div className="account-info-row"><span>KYC 认证</span><button className="account-inline-action" onClick={openKyc}>{kycStatusLabel} · 管理认证 <ArrowUpRight size={12}/></button></div><div className="account-info-row"><span>账户类型</span><b>本地演示账户</b></div></section>
           <section className="account-panel"><div className="account-panel-heading"><div><b>快捷操作</b><small>资金操作均绑定此个人 ID</small></div></div><div className="account-action-grid"><button onClick={openDeposit}><Coins size={16}/>充值 USDT</button><button onClick={openWithdrawal}><ArrowUpRight size={16}/>提现 USDT</button><button onClick={openKyc}><Fingerprint size={16}/>身份认证</button><button onClick={()=>setWorkspaceView('prediction')}><Activity size={16}/>我的预测</button></div><p className="account-demo-note"><TriangleAlert size={13}/> 余额和订单为模拟数据，不具备现金价值；不发生链上转账。</p></section></div>
+          <section className="account-panel account-invite-panel"><div className="account-panel-heading"><div><b>邀请好友</b><small>分享专属链接，新用户注册时会记录你的个人 ID</small></div><span className="account-invite-count">已邀请 {inviteCount} 人</span></div>{personalInviteLink?<><div className="account-invite-link"><span>{personalInviteLink}</span><button onClick={async()=>{try{await navigator.clipboard.writeText(personalInviteLink);notify('邀请链接已复制')}catch{notify('复制失败，请检查浏览器剪贴板权限')}}}><Copy size={14}/>复制链接</button></div><p className="account-invite-note"><ShieldCheck size={13}/> 邀请关系仅用于本平台演示记录；当前不会产生返佣或真实收益。</p></>:<div className="account-empty">注册账户后生成专属邀请链接</div>}</section>
           <section className="account-panel account-history-panel"><div className="account-panel-heading"><div><b>最近资金记录</b><small>充值和提现记录关联个人 ID</small></div><button className="account-text-action" onClick={openDeposit}>查看资金管理 <ArrowUpRight size={13}/></button></div>{walletTransactions.length===0?<div className="account-empty">暂无资金记录</div>:walletTransactions.slice(0,5).map(row=><div className="account-history-row" key={row.id}><div><b className={row.type==='deposit'?'':'negative'}>{row.type==='deposit'?'+':'−'}{fmt(row.amount)} USDT</b><small>{row.type==='deposit'?'充值':'提现'} · {row.network} · {new Date(row.createdAt).toLocaleString('zh-CN')}</small></div><span>{row.status==='completed'?'已完成':row.status==='pending'?'审核中':'已驳回'}</span></div>)}</section>
         </section>}
         {workspaceView==='market'&&frontConfig.showMarketOverview&&<>

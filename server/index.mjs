@@ -24,6 +24,7 @@ const staffUsers = new Map()
 const adminSessions = new Map()
 const agents = new Map()
 const agentRegistrations = new Map()
+const userReferralRegistrations = new Map()
 let exchangeEventsCache = { expiresAt: 0, payload: null }
 const syncedExchangeEvents = new Map()
 const permissionModules = [
@@ -1023,6 +1024,27 @@ app.post('/api/admin/agents/register', (req, res) => {
   agent.members.push(member)
   agentRegistrations.set(personalId, { email, agentId: agent.id, createdAt: new Date().toISOString() })
   res.status(201).json({ ok: true, agent: { id: agent.id, code: agent.code, name: agent.name }, member })
+})
+
+app.get('/api/referrals/:personalId', (req, res) => {
+  const personalId = String(req.params.personalId || '').trim().toUpperCase()
+  if (!validPersonalId(personalId)) return res.status(400).json({ error: '个人 ID 无效' })
+  const inviteCount = [...userReferralRegistrations.values()].filter(item => item.inviterId === personalId).length
+  res.json({ personalId, inviteCount })
+})
+
+app.post('/api/referrals/register', (req, res) => {
+  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : ''
+  const personalId = typeof req.body?.personalId === 'string' ? req.body.personalId.trim().toUpperCase() : ''
+  const inviterId = typeof req.body?.referralCode === 'string' ? req.body.referralCode.trim().toUpperCase() : ''
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || !validPersonalId(personalId) || !validPersonalId(inviterId) || personalId === inviterId) {
+    return res.status(400).json({ error: '个人邀请链接或注册资料无效' })
+  }
+  if (userReferralRegistrations.has(personalId) || [...userReferralRegistrations.values()].some(item => item.email === email)) {
+    return res.status(409).json({ error: '该演示账户已登记邀请关系' })
+  }
+  userReferralRegistrations.set(personalId, { email, inviterId, createdAt: new Date().toISOString() })
+  res.status(201).json({ ok: true, inviterId, personalId })
 })
 
 app.get('/api/time-contracts/quote', (req, res) => {

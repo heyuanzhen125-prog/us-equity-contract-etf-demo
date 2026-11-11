@@ -1,6 +1,7 @@
 import express from 'express'
 import { createHash, createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
 import { calculateCpmmPurchase, getCpmmProbability } from './prediction-market.mjs'
+import { getDirectWalletStatus } from './wallet-chain.mjs'
 
 const app = express()
 const submissions = new Map()
@@ -750,6 +751,9 @@ app.patch('/api/admin/front-config', requirePermission('front-config'), (req, re
 })
 app.get('/api/admin/deposit-config', requirePermission('deposits'), (_req, res) => {
   res.json({ currencies: frontendConfig.depositAssets })
+})
+app.get('/api/admin/direct-wallet-status', requirePermission('deposits'), (_req, res) => {
+  res.json(getDirectWalletStatus())
 })
 app.patch('/api/admin/deposit-config', requirePermission('deposits'), (req, res) => {
   const input = req.body?.currencies

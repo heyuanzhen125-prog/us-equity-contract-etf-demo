@@ -1171,6 +1171,24 @@ async function applyAdminOrderResult(kind, id, result, res) {
   }
   if (!order) return res.status(404).json({ error: '未找到该模拟订单' })
 
+  // Settlement is a one-way transition. Repeated clicks with the same result
+  // are harmless; changing an already settled result needs an audited correction flow.
+  if (order.status !== 'pending') {
+    if (order.status === result && order.result === result) return res.json({ ok: true, order, unchanged: true })
+    return res.status(409).json({ error: '订单已结算，不能直接覆盖结果' })
+  }
+
+  // Work on a copy so a failed database write cannot leave the process cache
+  // showing a settlement that the durable order record never accepted.
+  order = structuredClone(order)
+  const balanceCache = kind === 'etfOrders' ? etfBalances : virtualBalances
+  const previousCachedBalance = balanceCache.get(order.personalId)
+  const hadCachedBalance = balanceCache.has(order.personalId)
+  const restoreCachedBalance = () => {
+    if (hadCachedBalance) balanceCache.set(order.personalId, previousCachedBalance)
+    else balanceCache.delete(order.personalId)
+  }
+
   if (kind === 'contracts') {
     const timer = contractSettlementTimers.get(id)
     if (timer) clearTimeout(timer)
@@ -1181,11 +1199,18 @@ async function applyAdminOrderResult(kind, id, result, res) {
   else settleEtfOrder(order, result, { persist: false })
   try {
     const persisted = await savePlatformOrder(kind, order)
-    if (!persisted && process.env.VERCEL) return res.status(503).json({ error: '订单数据库尚未配置，结果未保存' })
+    if (!persisted && process.env.VERCEL) {
+      restoreCachedBalance()
+      return res.status(503).json({ error: '订单数据库尚未配置，结果未保存' })
+    }
   } catch (error) {
+    restoreCachedBalance()
     console.error('Unable to persist admin order result', error)
     return res.status(503).json({ error: '订单结果未保存，请稍后重试' })
   }
+  if (kind === 'contracts') predictions.set(id, order)
+  else if (kind === 'forecasts') forecasts.set(id, order)
+  else etfOrders.set(id, order)
   res.json({ ok: true, order })
 }
 

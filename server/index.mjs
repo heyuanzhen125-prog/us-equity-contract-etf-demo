@@ -70,7 +70,7 @@ const frontendConfig = {
   equityContractTitle: '合约 ETF',
   equityContractSubtitle: '浏览美股与杠杆 ETF 模拟行情，并使用虚拟账户体验下单。',
   timeContractTitle: '时间合约',
-  timeContractSubtitle: '设定标的、方向与到期时间，体验独立的时间合约模拟。',
+  timeContractSubtitle: '参考交易所短周期合约概率；使用虚拟 PTS 体验独立的 10 / 30 / 60 秒时间合约。',
   predictionTitle: '预测系统',
   predictionSubtitle: '围绕事件问题记录概率判断，查看个人预测，不与时间合约共用订单。',
   indexTitle: '美股主要指数',
@@ -503,7 +503,7 @@ function validProjectInput({ symbol, name, startPrice, targetChangePct }) {
 }
 
 function publicForecastEvents() {
-  return [...forecastEvents, ...syncedExchangeEvents.values()].map(event => {
+  return forecastEvents.map(event => {
     const submissions = [...forecasts.values()].filter(item => item.eventId === event.id)
     const liquidity = 10000
     let pool = {
@@ -543,23 +543,39 @@ async function syncExchangeEvents() {
         try { outcomes = Array.isArray(market.outcomes) ? market.outcomes : JSON.parse(market.outcomes || '[]') } catch {}
         try { prices = Array.isArray(market.outcomePrices) ? market.outcomePrices : JSON.parse(market.outcomePrices || '[]') } catch {}
         const yesIndex = outcomes.findIndex(value => /^yes$/i.test(String(value)))
-        const probability = Number(prices[yesIndex >= 0 ? yesIndex : 0])
-        return { id: `polymarket:${market.id}`, exchange: 'Polymarket', category: market.category || '事件市场', question: market.question || market.title || '未命名市场', probability: Number.isFinite(probability) ? Math.round(probability * 100) : null, volume: Number(market.volume24hr || market.volume || 0), endTime: market.endDate || null, url: market.slug ? `https://polymarket.com/event/${market.slug}` : 'https://polymarket.com' }
-      }).filter(item => item.question && item.probability !== null)
+        const probability = Number(prices[yesIndex])
+        const binaryYesNo = outcomes.length === 2 && yesIndex >= 0 && outcomes.some(value => /^no$/i.test(String(value)))
+        return { id: `polymarket:${market.id}`, exchange: 'Polymarket', category: market.category || '事件市场', question: market.question || market.title || '', probability: Number.isFinite(probability) ? Math.round(probability * 100) : null, volume: Number(market.volume24hr || market.volume || 0), endTime: market.endDate || null, url: market.slug ? `https://polymarket.com/event/${market.slug}` : 'https://polymarket.com', binaryYesNo }
+      }).filter(item => item.binaryYesNo && item.question && /\?$/.test(item.question.trim()) && item.probability !== null && item.probability > 0 && item.probability < 100 && Number.isFinite(item.volume))
     },
     async () => {
-      const data = await fetchJson('https://api.elections.kalshi.com/trade-api/v2/markets?limit=40&status=open')
-      return (data.markets || []).map(market => {
-        const yes = Number(market.yes_ask_dollars ?? market.yes_bid_dollars ?? (Number(market.yes_ask ?? market.last_price ?? 0) / 100))
-        return { id: `kalshi:${market.ticker}`, exchange: 'Kalshi', category: market.category || '事件市场', question: market.title || market.subtitle || market.ticker, probability: Number.isFinite(yes) ? Math.round(yes * 100) : null, volume: Number(market.volume_24h || market.volume || 0), endTime: market.close_time || market.expiration_time || null, url: `https://kalshi.com/markets/${market.ticker}` }
-      }).filter(item => item.question && item.probability !== null)
+      const data = await fetchJson('https://api.elections.kalshi.com/trade-api/v2/events?limit=200&status=open&with_nested_markets=true')
+      return (data.events || []).flatMap(event => (event.markets || []).map(market => {
+        let title = typeof market.title === 'string' ? market.title.trim() : ''
+        const yesSubtitle = typeof market.yes_sub_title === 'string' ? market.yes_sub_title.trim() : ''
+        const whoMatch = title.match(/^Who will (.+) be\?$/i)
+        const whenMatch = title.match(/^When will (.+)\?$/i)
+        if (whoMatch && yesSubtitle) title = `Will ${yesSubtitle} be ${whoMatch[1]}?`
+        else if (whenMatch && /^before\s+/i.test(yesSubtitle)) title = `Will ${whenMatch[1]} ${yesSubtitle.toLowerCase()}?`
+        const bid = Number(market.yes_bid_dollars)
+        const ask = Number(market.yes_ask_dollars)
+        const last = Number(market.last_price_dollars)
+        const probability = Number.isFinite(bid) && bid > 0 && Number.isFinite(ask) && ask > 0 ? (bid + ask) / 2 : ask > 0 ? ask : bid > 0 ? bid : last
+        return { id: `kalshi:${market.ticker}`, exchange: 'Kalshi', category: event.category || '事件市场', question: title, probability: Number.isFinite(probability) ? Math.round(probability * 100) : null, volume: Number(market.volume_24h_fp || market.volume_24h || 0), endTime: market.close_time || market.expiration_time || null, url: `https://kalshi.com/markets/${market.ticker}`, marketType: market.market_type }
+      })).filter(item => item.marketType === 'binary' && item.question && /\?$/.test(item.question) && item.probability !== null && item.probability > 0 && item.probability < 100 && Number.isFinite(item.volume) && !item.id.includes('CROSSCATEGORY'))
     },
   ]
-  await Promise.all(adapters.map(async adapter => {
-    try { settled.push({ ok: true, items: await adapter() }) }
-    catch (error) { settled.push({ ok: false, error: error instanceof Error ? error.message : 'provider unavailable', items: [] }) }
+  const settled = await Promise.all(adapters.map(async adapter => {
+    try { return { ok: true, items: await adapter() } }
+    catch (error) { return { ok: false, error: error instanceof Error ? error.message : 'provider unavailable', items: [] } }
   }))
-  const items = settled.flatMap(result => result.items).sort((a, b) => b.volume - a.volume).slice(0, 60).map(item => ({
+  const seenQuestions = new Set()
+  const items = settled.flatMap(result => result.items).sort((a, b) => b.volume - a.volume).filter(item => {
+    const key = `${item.exchange}:${item.question.trim().toLowerCase()}`
+    if (seenQuestions.has(key)) return false
+    seenQuestions.add(key)
+    return true
+  }).slice(0, 20).map(({ marketType: _marketType, binaryYesNo: _binaryYesNo, ...item }) => ({
     ...item,
     platformEventId: `EVT-X-${createHash('sha256').update(item.id).digest('hex').slice(0, 12).toUpperCase()}`,
   }))

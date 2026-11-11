@@ -19,6 +19,7 @@ export default function PredictionMarketPanel({ personalId, onRegister, notify, 
   const [exchangeSources, setExchangeSources] = useState<Record<string, boolean>>({})
   const [exchangeUpdatedAt, setExchangeUpdatedAt] = useState('')
   const [exchangeUnavailable, setExchangeUnavailable] = useState(false)
+  const [showAllEvents, setShowAllEvents] = useState(false)
   const initialized = useRef(false)
   const allEvents = useMemo(() => {
     const synced: Event[] = exchangeEvents.map(item => ({ id: item.platformEventId, category: item.category, question: item.question, description: `同步自 ${item.exchange} · 参考概率 ${item.probability}% · 本平台模拟积分交易`, consensus: item.probability, marketProbability: item.probability, predictionCount: 0, horizon: item.endTime ? new Date(item.endTime).toLocaleString() : '交易所市场开放中', volume: `交易所 24h ${Math.round(item.volume).toLocaleString()}`, rewardPercent: 80, sourceExchange: item.exchange, sourceUrl: item.url, sourceProbability: item.probability, externalMarketId: item.id }))
@@ -27,6 +28,7 @@ export default function PredictionMarketPanel({ personalId, onRegister, notify, 
   }, [events, exchangeEvents])
   const categories = ['全部', ...new Set(allEvents.map(event => event.category))]
   const visible = category === '全部' ? allEvents : allEvents.filter(event => event.category === category)
+  const displayedEvents = showAllEvents ? visible : visible.slice(0, 6)
 
   useEffect(() => { setNotes(current => ({ ...Object.fromEntries(allEvents.map(event => [event.id, current[event.id] ?? ''])), ...current })) }, [allEvents])
 
@@ -89,16 +91,16 @@ export default function PredictionMarketPanel({ personalId, onRegister, notify, 
 
   return <section className="forecast-panel">
     <div className="forecast-intro"><div><div className="forecast-kicker"><Activity size={13}/> FORECAST WORKSPACE</div><h2>{title}</h2><p>{subtitle} 此模块使用虚拟积分，不涉及真实资金。</p></div><div className="forecast-account"><LockKeyhole size={14}/><span>{personalId ? `绑定个人 ID · ${personalId}` : '注册后可保存个人预测'}</span></div></div>
-    <div className="forecast-disclaimer"><CircleHelp size={15}/><span>模拟预测市场：下单时直接选择 YES 或 NO；市场概率由 Manifold CPMM 做市公式按虚拟积分投入动态计算。结果及演示收益仍按后台规则处理；积分不具备现金价值。</span></div>
+    <div className="forecast-disclaimer"><CircleHelp size={15}/><span>本地事件按 CPMM 模型随虚拟积分参与更新概率；交易所同步事件显示其 YES 市场概率。平台内订单使用 PTS，由后台演示规则结算，不会发往交易所。</span></div>
     {personalId && <div className="forecast-balance">虚拟积分余额 <b>{balance.toLocaleString('en-US')} PTS</b></div>}
-    <div className="forecast-toolbar"><div className="forecast-filters">{categories.map(item => <button className={category===item?'selected':''} key={item} onClick={()=>setCategory(item)}>{item}</button>)}</div><span><Clock3 size={12}/>{['Kalshi','Polymarket'].map(source=>`${source}${exchangeSources[source]?'已同步':'同步中'}`).join(' · ')} · {exchangeUpdatedAt?new Date(exchangeUpdatedAt).toLocaleTimeString():'每分钟刷新'}</span></div>
-    {allEvents.length===0?<div className="forecast-empty">{exchangeUnavailable?'交易所暂时无法同步，后台发布的模拟事件仍可用。':'正在同步交易所事件；后台模拟事件可在此处同时交易。'}</div>:<div className="forecast-grid">{visible.map(event => { const saved = forecasts.find(row => row.eventId === event.id); const predictionCount = event.predictionCount ?? 0; const marketProbability = event.marketProbability ?? event.consensus; return <article className="forecast-card" key={event.id}>
+    <div className="forecast-toolbar"><div className="forecast-filters">{categories.map(item => <button className={category===item?'selected':''} key={item} onClick={()=>{setCategory(item);setShowAllEvents(false)}}>{item}</button>)}</div><span><Clock3 size={12}/>{['Kalshi','Polymarket'].map(source=>`${source}${exchangeSources[source]?'已同步':'同步中'}`).join(' · ')} · {exchangeUpdatedAt?new Date(exchangeUpdatedAt).toLocaleTimeString():'每分钟刷新'}</span></div>
+    {allEvents.length===0?<div className="forecast-empty">{exchangeUnavailable?'交易所暂时无法同步，后台发布的模拟事件仍可用。':'正在同步二元事件；后台发布的模拟事件也会显示在这里。'}</div>:<><div className="forecast-grid">{displayedEvents.map(event => { const saved = forecasts.find(row => row.eventId === event.id); const predictionCount = event.predictionCount ?? 0; const marketProbability = event.marketProbability ?? event.consensus; return <article className="forecast-card" key={event.id}>
       <div className="forecast-card-top"><span>{event.sourceExchange ? `${event.sourceExchange} · ${event.category}` : event.category}</span><small><TrendingUp size={12}/> {predictionCount ? `${predictionCount} 人已预测` : event.sourceExchange ? '交易所同步事件' : '后台起始概率'}</small></div><h3>{event.question}</h3><p>{event.description}</p><div className="forecast-reward"><span>{event.sourceExchange ? '本平台模拟收益比例' : '演示收益比例'}</span><b>+{event.rewardPercent}%</b></div><div className="forecast-progress"><div><span>{event.sourceExchange ? `${event.sourceExchange} 参考概率` : predictionCount ? 'CPMM 市场概率' : '后台起始概率'}</span><b>{marketProbability}%</b></div><div className="forecast-track"><i style={{ width: `${marketProbability}%` }}/></div></div>
       <div className="forecast-choice-field"><span>我的方向选择</span><div className="forecast-choice-buttons"><button type="button" className={choices[event.id]==='YES'?'yes selected':''} disabled={saved?.status !== undefined && saved.status !== 'pending'} onClick={()=>setChoices(current=>({...current,[event.id]:'YES'}))}>YES</button><button type="button" className={choices[event.id]==='NO'?'no selected':''} disabled={saved?.status !== undefined && saved.status !== 'pending'} onClick={()=>setChoices(current=>({...current,[event.id]:'NO'}))}>NO</button></div></div>
       <label className="forecast-note-label">判断依据（选填）<textarea rows={2} maxLength={280} value={notes[event.id]||''} disabled={saved?.status !== undefined && saved.status !== 'pending'} onChange={e=>setNotes(current=>({...current,[event.id]:e.target.value}))} placeholder="记录你参考的数据或理由，最多 280 字"/></label>
       <label className="forecast-stake">投入虚拟积分{saved && <span>{saved.stake} PTS 已投入</span>}<input type="number" min="10" max="1000" step="10" value={saved?.stake ?? stakes[event.id] ?? 100} disabled={Boolean(saved)} onChange={e=>setStakes(current=>({...current,[event.id]:Number(e.target.value)}))}/></label>
       <div className="forecast-card-footer"><span><Clock3 size={12}/> {event.horizon}{saved && <strong className={`forecast-result ${saved.status}`}>{saved.status==='pending'?'待结算':saved.status==='won'?'已赢':'已输'}</strong>}</span><button onClick={()=>void save(event)} disabled={saving===event.id||saved?.status==='won'||saved?.status==='lost'}>{saving===event.id?'保存中…':saved?<><Check size={13}/> 已保存</>:'保存并投入'} <ArrowUpRight size={13}/></button></div>
       <small className="forecast-meta">{event.sourceExchange ? `来源：${event.sourceExchange} · 交易发生在本平台虚拟积分账户 · 外部事件结果由后台结算` : predictionCount ? `CPMM 模拟报价 · ${predictionCount} 笔预测` : '暂无用户交易，显示后台设置的起始概率'}{saved?` · 投入 ${saved.stake} PTS · ${saved.status==='pending'?'等待后台结果':`${saved.status==='won'?'赢':'输'} · ${saved.profit && saved.profit > 0 ? '+' : ''}${saved.profit ?? 0} PTS`}`:''}</small>
-    </article>})}</div>}
+    </article>})}</div>{visible.length>6&&<button className="forecast-more" onClick={()=>setShowAllEvents(value=>!value)}>{showAllEvents?'收起':'查看更多事件'} · {visible.length} 个市场</button>}</>}
   </section>
 }

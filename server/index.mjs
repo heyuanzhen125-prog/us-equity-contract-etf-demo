@@ -7,6 +7,8 @@ const submissions = new Map()
 const walletTransactions = new Map()
 const walletBalances = new Map()
 const projects = new Map()
+const syncedTimeContractProjects = new Map()
+let timeContractProjectCache = { expiresAt: 0, projects: [] }
 const predictions = new Map()
 const contractSettlementTimers = new Map()
 const virtualBalances = new Map()
@@ -404,6 +406,13 @@ function buildCurve(startPrice, targetChangePct, seed = 0) {
 }
 
 function publicProject(project) {
+  if (project.sourceExchange) return {
+    id: project.id, symbol: project.symbol, name: project.name, startPrice: project.startPrice,
+    lastPrice: project.lastPrice, targetChangePct: rounded((project.lastPrice / project.startPrice - 1) * 100),
+    curve: project.marketCurve, simulated: true, visible: true, sortOrder: project.sortOrder,
+    updatedAt: project.updatedAt, sourceExchange: project.sourceExchange, sourceUrl: project.sourceUrl,
+    sourceExpiry: project.sourceExpiry, sourceTicker: project.sourceTicker,
+  }
   const marketPoints = project.marketCurve || project.curve
   const intervalSeconds = project.marketPointIntervalSeconds || 5
   const elapsedSteps = Math.max(0, (Date.now() - (project.marketStartedAt || Date.now())) / (intervalSeconds * 1000))
@@ -679,8 +688,69 @@ app.put('/api/admin/forecast-events', requirePermission('front-config'), (req, r
   res.json({ events: forecastEvents })
 })
 
-app.get('/api/projects', (_req, res) => {
-  res.json({ projects: [...projects.values()].filter(project => project.visible).sort((a, b) => a.sortOrder - b.sortOrder).map(publicProject) })
+async function syncTimeContractProjects(force = false) {
+  if (!force && timeContractProjectCache.expiresAt > Date.now()) return timeContractProjectCache.projects
+  const now = Date.now()
+  const items = []
+  const fetchJson = async url => {
+    const response = await fetch(url, { signal: AbortSignal.timeout(6000), headers: { accept: 'application/json' } })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    return response.json()
+  }
+  const kalshiSeries = [
+    { ticker: 'KXBTC15M', symbol: 'BTC', label: '比特币' },
+    { ticker: 'KXETH15M', symbol: 'ETH', label: '以太坊' },
+    { ticker: 'KXSOL15M', symbol: 'SOL', label: 'Solana' },
+    { ticker: 'KXXRP15M', symbol: 'XRP', label: 'XRP' },
+  ]
+  const kalshiRequests = kalshiSeries.map(async series => {
+    const data = await fetchJson(`https://api.elections.kalshi.com/trade-api/v2/markets?limit=1&status=open&series_ticker=${series.ticker}`)
+    const market = (data.markets || []).find(row => row.status === 'active' && Date.parse(row.close_time || row.expiration_time || '') > now)
+    if (!market) return
+    const quote = Number(market.yes_ask_dollars ?? market.last_price_dollars ?? (Number(market.yes_ask ?? market.last_price ?? 0) / 100))
+    if (!Number.isFinite(quote) || quote <= 0 || quote >= 1) return
+    items.push({ group: `kalshi-${series.symbol}-15m`, sourceExchange: 'Kalshi', symbol: `KALSHI-${series.symbol}-15M`, name: `Kalshi ${series.label} 15 分钟合约概率`, quote: quote * 100, sourceTicker: market.ticker, sourceExpiry: market.close_time || market.expiration_time, sourceUrl: `https://kalshi.com/markets/${market.ticker}` })
+  })
+  const polymarketAssets = [{ symbol: 'BTC', label: 'Bitcoin' }, { symbol: 'ETH', label: 'Ethereum' }, { symbol: 'SOL', label: 'Solana' }, { symbol: 'XRP', label: 'XRP' }]
+  const currentFiveMinuteEpoch = Math.floor(now / 300000) * 300
+  const polymarketRequests = polymarketAssets.map(async asset => {
+    const slug = `${asset.symbol.toLowerCase()}-updown-5m-${currentFiveMinuteEpoch}`
+    const data = await fetchJson(`https://gamma-api.polymarket.com/events/slug/${slug}`)
+    const event = Array.isArray(data) ? data[0] : data
+    const market = event?.markets?.find(row => row.active !== false && row.closed !== true) || event?.markets?.[0]
+    if (!market) return
+    let outcomes = []; let prices = []
+    try { outcomes = Array.isArray(market.outcomes) ? market.outcomes : JSON.parse(market.outcomes || '[]') } catch {}
+    try { prices = Array.isArray(market.outcomePrices) ? market.outcomePrices : JSON.parse(market.outcomePrices || '[]') } catch {}
+    const upIndex = outcomes.findIndex(value => /^(up|yes)$/i.test(String(value)))
+    const quote = Number(prices[upIndex >= 0 ? upIndex : 0])
+    if (!Number.isFinite(quote) || quote <= 0 || quote >= 1) return
+    items.push({ group: `polymarket-${asset.symbol}-5m`, sourceExchange: 'Polymarket', symbol: `POLY-${asset.symbol}-5M`, name: `Polymarket ${asset.label} 5 分钟涨跌概率`, quote: quote * 100, sourceTicker: market.id || event.id || slug, sourceExpiry: market.endDate || event.endDate, sourceUrl: event.slug ? `https://polymarket.com/event/${event.slug}` : `https://polymarket.com/event/${slug}` })
+  })
+  const [kalshiResults, polymarketResults] = await Promise.all([Promise.allSettled(kalshiRequests), Promise.allSettled(polymarketRequests)])
+  const providerStatuses = { Kalshi: kalshiResults.some(item => item.status === 'fulfilled'), Polymarket: polymarketResults.some(item => item.status === 'fulfilled') }
+  for (const [index, item] of items.entries()) {
+    const id = `TIME-X-${createHash('sha256').update(item.group).digest('hex').slice(0, 12).toUpperCase()}`
+    const previous = syncedTimeContractProjects.get(id)
+    const history = [...(previous?.marketCurve || []), rounded(item.quote)].slice(-20)
+    syncedTimeContractProjects.set(id, {
+      id, symbol: item.symbol, name: item.name, startPrice: previous?.startPrice || rounded(item.quote), lastPrice: rounded(item.quote),
+      targetChangePct: 0, curve: history, marketCurve: history, marketStartedAt: now, marketPointIntervalSeconds: 1,
+      visible: true, sortOrder: projects.size + index, updatedAt: new Date(now).toISOString(),
+      sourceExchange: item.sourceExchange, sourceUrl: item.sourceUrl, sourceExpiry: item.sourceExpiry, sourceTicker: item.sourceTicker,
+    })
+  }
+  for (const [id, project] of syncedTimeContractProjects) {
+    if (project.sourceExpiry && Date.parse(project.sourceExpiry) <= now) syncedTimeContractProjects.delete(id)
+  }
+  const synced = [...syncedTimeContractProjects.values()]
+  timeContractProjectCache = { expiresAt: now + 15000, projects: synced, sources: providerStatuses }
+  return synced
+}
+
+app.get('/api/projects', async (_req, res) => {
+  const synced = await syncTimeContractProjects()
+  res.json({ projects: [...projects.values()].filter(project => project.visible).sort((a, b) => a.sortOrder - b.sortOrder).map(publicProject).concat(synced.map(publicProject)), sources: timeContractProjectCache.sources || {} })
 })
 
 app.get('/api/admin/projects', requirePermission('projects'), (_req, res) => {
@@ -1041,11 +1111,15 @@ app.post('/api/etf-orders', (req, res) => {
   res.status(201).json({ order: item, balance: etfBalances.get(personalId) ?? 25000 })
 })
 
-app.post('/api/time-contracts', (req, res) => {
+app.post('/api/time-contracts', async (req, res) => {
   if (!frontendConfig.showTimeContracts) return res.status(403).json({ error: '后台已关闭时间合约模块' })
   const { personalId, projectId, direction, durationSeconds, stake } = req.body || {}
   if (!validPersonalId(personalId)) return res.status(400).json({ error: '请先注册并绑定个人 ID' })
-  const project = projects.get(projectId)
+  let project = projects.get(projectId) || syncedTimeContractProjects.get(projectId)
+  if (!project && typeof projectId === 'string' && projectId.startsWith('TIME-X-')) {
+    try { await syncTimeContractProjects(true) } catch {}
+    project = syncedTimeContractProjects.get(projectId)
+  }
   if (!project) return res.status(404).json({ error: '请选择一个后台已发布的 SIM 演示项目' })
   const duration = Number(durationSeconds)
   const amount = Number(stake)
@@ -1057,13 +1131,19 @@ app.post('/api/time-contracts', (req, res) => {
   virtualBalances.set(personalId, balance - amount)
   const item = {
     id: randomUUID(), personalId, projectId, projectSymbol: project.symbol, direction, durationSeconds: duration, stake: amount,
-    status: 'pending', result: null, forcedResult: getOutcomePolicy('contracts', personalId), payoutPercent: timePayoutPercent(direction, projectId), entryPrice: project.curve[0], targetPrice: project.curve.at(-1), exitPrice: null, payout: null, profit: null,
+    status: 'pending', result: null, forcedResult: getOutcomePolicy('contracts', personalId), payoutPercent: timePayoutPercent(direction, projectId), entryPrice: project.sourceExchange ? project.lastPrice : project.curve[0], targetPrice: project.sourceExchange ? project.lastPrice : project.curve.at(-1), exitPrice: null, payout: null, profit: null,
     createdAt: new Date().toISOString(), settledAt: null,
   }
   predictions.set(item.id, item)
-  const settlementTimer = setTimeout(() => {
+  const settlementTimer = setTimeout(async () => {
     contractSettlementTimers.delete(item.id)
     if (item.status !== 'pending') return
+    if (project.sourceExchange && !item.forcedResult) {
+      try {
+        await syncTimeContractProjects(true)
+        item.targetPrice = syncedTimeContractProjects.get(projectId)?.lastPrice ?? item.entryPrice
+      } catch { item.targetPrice = item.entryPrice }
+    }
     const exitPrice = item.targetPrice
     const delta = exitPrice - item.entryPrice
     const result = item.forcedResult || (Math.abs(delta) < item.entryPrice * 0.0001 ? 'draw' : ((delta > 0) === (item.direction === 'up') ? 'won' : 'lost'))

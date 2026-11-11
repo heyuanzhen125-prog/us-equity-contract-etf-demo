@@ -31,7 +31,7 @@ const assets: Asset[] = [
   { symbol: 'NVDL', name: 'NVDA 2× 做多 ETF', last: 100, change: 0, volume: '—', type: '2× 多头 ETF', color: '#84d6b2', spark: [25, 25, 25, 25, 25, 25, 25, 25] },
   { symbol: 'TSLL', name: 'TSLA 2× 做多 ETF', last: 100, change: 0, volume: '—', type: '2× 多头 ETF', color: '#84d6b2', spark: [25, 25, 25, 25, 25, 25, 25, 25] },
 ]
-const tabs = ['全部', '热门', '科技', '指数', '加密概念']
+const tabs = ['全部', '热门', '科技', '指数', '行业 ETF', '加密概念']
 const fmt = (v: number) => v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const createPersonalId = () => `NST-${Date.now().toString(36).slice(-4).toUpperCase()}${Math.random().toString(36).slice(2, 6).toUpperCase()}`
 type KycStatus = 'unverified' | 'pending' | 'verified' | 'rejected'
@@ -248,7 +248,7 @@ export default function App() {
   const simulatedProjects = useMemo(() => demoProjects.filter(project => !project.sourceExchange), [demoProjects])
   const visible = useMemo(() => frontConfig.marketAssets.filter(a => {
     const matchesSearch = (`${a.symbol} ${a.name}`).toLowerCase().includes(search.toLowerCase())
-    const matchesTab = activeTab === '全部' || (activeTab === '热门' && ['NVDA', 'TSLA', 'SPY', 'QQQ', 'TQQQ', 'SOXL'].includes(a.symbol)) || (activeTab === '科技' && ['NVDA', 'TSLA', 'AAPL', 'QQQ', 'TQQQ', 'SQQQ', 'SOXL', 'SOXS', 'NVDL'].includes(a.symbol)) || (activeTab === '指数' && ['SPY', 'QQQ', 'IWM', 'DIA', 'TQQQ', 'SQQQ'].includes(a.symbol)) || (activeTab === '加密概念' && a.symbol === 'MSTR')
+    const matchesTab = activeTab === '全部' || (activeTab === '热门' && ['NVDA', 'TSLA', 'SPY', 'QQQ', 'TQQQ', 'SOXL', 'UPRO', 'QLD'].includes(a.symbol)) || (activeTab === '科技' && ['NVDA', 'TSLA', 'AAPL', 'QQQ', 'TQQQ', 'SQQQ', 'SOXL', 'SOXS', 'NVDL', 'TSLL', 'TECL', 'TECS'].includes(a.symbol)) || (activeTab === '指数' && ['SPY', 'QQQ', 'IWM', 'DIA', 'TQQQ', 'SQQQ', 'UPRO', 'SPXU', 'QLD', 'QID', 'TNA', 'TZA'].includes(a.symbol)) || (activeTab === '行业 ETF' && ['SOXL', 'SOXS', 'TECL', 'TECS', 'LABU', 'LABD', 'FAS', 'FAZ'].includes(a.symbol)) || (activeTab === '加密概念' && a.symbol === 'MSTR')
     return matchesSearch && matchesTab
   }), [search, activeTab, frontConfig.marketAssets])
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(''), 2600) }

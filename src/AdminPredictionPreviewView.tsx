@@ -135,10 +135,10 @@ export default function AdminPredictionPreviewView({ adminKey }: { adminKey: str
     setError('')
     setNotice('')
     try {
-      const response = await fetch(`/api/admin/orders/${order.kind}/${order.id}/result`, {
+      const response = await fetch('/api/admin/order-result', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', 'x-admin-key': adminKey },
-        body: JSON.stringify({ result }),
+        body: JSON.stringify({ kind: order.kind, id: order.id, result }),
       })
       const data = await readAdminJson<{ order: Order }>(response, '设置订单结果')
       setOrders(current => current.map(item => item.id === order.id ? { ...item, ...data.order } : item))

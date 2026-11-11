@@ -111,6 +111,12 @@ async function loadPlatformOrders(personalId = '') {
   return (rows || []).map(row => ({ kind: row.kind, item: row.order_data }))
 }
 
+async function loadPlatformOrder(kind, id) {
+  if (!platformDatabaseConfig()) return null
+  const rows = await platformDatabaseRequest('platform_orders', `?select=order_data&kind=eq.${encodeURIComponent(kind)}&id=eq.${encodeURIComponent(id)}&limit=1`)
+  return rows?.[0]?.order_data || null
+}
+
 async function savePlatformMember(member) {
   if (!platformDatabaseConfig()) return false
   await platformDatabaseRequest('platform_members', '?on_conflict=personal_id', {
@@ -602,7 +608,7 @@ function publicPrediction(item) {
   }
 }
 
-function settleContract(item, result) {
+function settleContract(item, result, { persist = true } = {}) {
   const previousPayout = item.payout || 0
   const payout = result === 'won' ? rounded(item.stake * (1 + item.payoutPercent / 100)) : 0
   item.status = result
@@ -612,7 +618,7 @@ function settleContract(item, result) {
   item.profit = rounded(payout - item.stake)
   item.settledAt = new Date().toISOString()
   virtualBalances.set(item.personalId, rounded((virtualBalances.get(item.personalId) ?? 10000) + payout - previousPayout))
-  void savePlatformOrder('contracts', item).catch(error => console.error('Unable to persist settled time contract', error))
+  if (persist) void savePlatformOrder('contracts', item).catch(error => console.error('Unable to persist settled time contract', error))
 }
 
 function timePayoutPercent(direction, projectId) {
@@ -634,7 +640,7 @@ function getOutcomePolicy(kind, personalId) {
   return outcomePolicies[kind].users.get(personalId) || outcomePolicies[kind].all
 }
 
-function settleForecast(item, result) {
+function settleForecast(item, result, { persist = true } = {}) {
   const previousPayout = item.payout || 0
   const payout = result === 'won' ? rounded(item.stake * (1 + item.rewardPercent / 100)) : 0
   item.status = result
@@ -643,11 +649,11 @@ function settleForecast(item, result) {
   item.profit = rounded(payout - item.stake)
   item.settledAt = new Date().toISOString()
   virtualBalances.set(item.personalId, rounded((virtualBalances.get(item.personalId) ?? 10000) + payout - previousPayout))
-  void savePlatformOrder('forecasts', item).catch(error => console.error('Unable to persist settled forecast', error))
+  if (persist) void savePlatformOrder('forecasts', item).catch(error => console.error('Unable to persist settled forecast', error))
   return true
 }
 
-function settleEtfOrder(item, result) {
+function settleEtfOrder(item, result, { persist = true } = {}) {
   const previousPayout = item.payout || 0
   const payout = result === 'won' ? rounded(item.amount * (1 + item.payoutPercent * (item.leverage || 1) / 100)) : 0
   item.status = result
@@ -656,7 +662,7 @@ function settleEtfOrder(item, result) {
   item.profit = rounded(payout - item.amount)
   item.settledAt = new Date().toISOString()
   etfBalances.set(item.personalId, rounded((etfBalances.get(item.personalId) ?? 25000) + payout - previousPayout))
-  void savePlatformOrder('etfOrders', item).catch(error => console.error('Unable to persist settled ETF order', error))
+  if (persist) void savePlatformOrder('etfOrders', item).catch(error => console.error('Unable to persist settled ETF order', error))
   return true
 }
 
@@ -1124,28 +1130,51 @@ app.get('/api/admin/orders', requirePermission('prediction-preview'), async (_re
   res.json({ orders })
 })
 
-app.patch('/api/admin/orders/:kind/:id/result', requirePermission('prediction-preview'), async (req, res) => {
-  const { kind, id } = req.params
-  const { result } = req.body || {}
+async function applyAdminOrderResult(kind, id, result, res) {
   if (!['contracts', 'forecasts', 'etfOrders'].includes(kind)) return res.status(404).json({ error: '订单类型无效' })
   if (!['won', 'lost'].includes(result)) return res.status(400).json({ error: '订单结果必须为赢或输' })
+  if (typeof id !== 'string' || !id || id.length > 100) return res.status(400).json({ error: '订单 ID 无效' })
 
   let order
   if (kind === 'contracts') order = predictions.get(id)
   else if (kind === 'etfOrders') order = etfOrders.get(id)
   else order = [...forecasts.values()].find(item => item.id === id)
+  if (!order && platformDatabaseConfig()) {
+    try { order = await loadPlatformOrder(kind, id) }
+    catch (error) {
+      console.error('Unable to load platform order for settlement', error)
+      return res.status(503).json({ error: '订单读取失败，请稍后重试' })
+    }
+  }
   if (!order) return res.status(404).json({ error: '未找到该模拟订单' })
 
   if (kind === 'contracts') {
     const timer = contractSettlementTimers.get(id)
     if (timer) clearTimeout(timer)
     contractSettlementTimers.delete(id)
-    settleContract(order, result)
+    settleContract(order, result, { persist: false })
   }
-  else if (kind === 'forecasts') settleForecast(order, result)
-  else settleEtfOrder(order, result)
-  await savePlatformOrder(kind, order)
+  else if (kind === 'forecasts') settleForecast(order, result, { persist: false })
+  else settleEtfOrder(order, result, { persist: false })
+  try {
+    const persisted = await savePlatformOrder(kind, order)
+    if (!persisted && process.env.VERCEL) return res.status(503).json({ error: '订单数据库尚未配置，结果未保存' })
+  } catch (error) {
+    console.error('Unable to persist admin order result', error)
+    return res.status(503).json({ error: '订单结果未保存，请稍后重试' })
+  }
   res.json({ ok: true, order })
+}
+
+// Keep the admin mutation path shallow for serverless routing and resolve persisted orders across instances.
+app.patch('/api/admin/order-result', requirePermission('prediction-preview'), async (req, res) => {
+  const { kind, id, result } = req.body || {}
+  await applyAdminOrderResult(kind, id, result, res)
+})
+
+app.patch('/api/admin/orders/:kind/:id/result', requirePermission('prediction-preview'), async (req, res) => {
+  const { kind, id } = req.params
+  await applyAdminOrderResult(kind, id, req.body?.result, res)
 })
 
 app.post('/api/admin/projects', requirePermission('projects'), (req, res) => {

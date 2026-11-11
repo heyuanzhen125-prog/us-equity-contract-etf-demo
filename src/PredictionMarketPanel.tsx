@@ -6,6 +6,15 @@ type Forecast = { id: string; personalId: string; eventId: string; probability: 
 type Event = { id: string; category: string; question: string; description: string; consensus: number; marketProbability?: number | null; predictionCount?: number; horizon: string; volume: string; rewardPercent: number; sourceExchange?: string; sourceUrl?: string; sourceProbability?: number; externalMarketId?: string }
 type ExchangeEvent = { id: string; platformEventId: string; exchange: string; category: string; question: string; probability: number; volume: number; endTime: string | null; url: string }
 
+async function readPredictionJson<T>(response: Response, label: string): Promise<T> {
+  const text = await response.text()
+  let data: T
+  try { data = JSON.parse(text) as T }
+  catch { throw new Error(`${label}接口返回非 JSON（HTTP ${response.status}，${window.location.hostname}），请刷新后重试`) }
+  if (!response.ok) throw new Error((data as { error?: string })?.error || `${label}请求失败（HTTP ${response.status}）`)
+  return data
+}
+
 
 export default function PredictionMarketPanel({ personalId, onRegister, notify, events, title, subtitle }: { personalId: string; onRegister: () => void; notify: (message: string) => void; events: Event[]; title: string; subtitle: string }) {
   const [forecasts, setForecasts] = useState<Forecast[]>([])
@@ -39,8 +48,7 @@ export default function PredictionMarketPanel({ personalId, onRegister, notify, 
   useVisiblePolling(async signal => {
     try {
       const response = await fetch('/api/exchange-events', { signal })
-      if (!response.ok) throw new Error('exchange feed unavailable')
-      const result = await response.json()
+      const result = await readPredictionJson<{ items?: ExchangeEvent[]; sources?: Record<string, boolean>; updatedAt?: string }>(response, '交易所事件行情')
       setExchangeEvents(Array.isArray(result.items) ? result.items : [])
       setExchangeSources(result.sources || {})
       setExchangeUpdatedAt(result.updatedAt || '')
@@ -53,8 +61,7 @@ export default function PredictionMarketPanel({ personalId, onRegister, notify, 
     if (!personalId) return
     try {
       const response = await fetch(`/api/forecasts?personalId=${encodeURIComponent(personalId)}`, { signal })
-      if (!response.ok) return
-      const result = await response.json()
+      const result = await readPredictionJson<{ forecasts?: Forecast[]; balance?: number }>(response, '个人预测记录')
       const rows: Forecast[] = result.forecasts || []
       setForecasts(rows)
       setBalance(result.balance ?? 10000)
@@ -78,8 +85,7 @@ export default function PredictionMarketPanel({ personalId, onRegister, notify, 
     setSaving(event.id)
     try {
       const response = await fetch('/api/forecasts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ personalId, eventId: event.id, choice, probability: choice === 'YES' ? 75 : 25, rationale: notes[event.id] || '', stake: saved?.stake ?? stakes[event.id] ?? 100 }) })
-      const result = await response.json()
-      if (!response.ok) throw new Error(result.error || '保存预测失败')
+      const result = await readPredictionJson<{ forecast: Forecast; balance: number }>(response, '保存事件预测')
       setForecasts(current => [result.forecast, ...current.filter(row => row.eventId !== event.id)])
       setChoices(current => ({ ...current, [event.id]: result.forecast.choice || choice }))
       setBalance(result.balance)

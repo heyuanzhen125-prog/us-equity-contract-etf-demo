@@ -107,7 +107,7 @@ async function persistOrderOrRespond(res, kind, item) {
 async function loadPlatformOrders(personalId = '') {
   if (!platformDatabaseConfig()) return null
   const filter = personalId ? `&personal_id=eq.${encodeURIComponent(personalId)}` : ''
-  const rows = await platformDatabaseRequest('platform_orders', `?select=kind,order_data&order=created_at.desc&limit=300${filter}`)
+  const rows = await platformDatabaseRequest('platform_orders', `?select=kind,order_data&order=created_at.desc&limit=1000${filter}`)
   return (rows || []).map(row => ({ kind: row.kind, item: row.order_data }))
 }
 
@@ -115,6 +115,29 @@ async function loadPlatformOrder(kind, id) {
   if (!platformDatabaseConfig()) return null
   const rows = await platformDatabaseRequest('platform_orders', `?select=order_data&kind=eq.${encodeURIComponent(kind)}&id=eq.${encodeURIComponent(id)}&limit=1`)
   return rows?.[0]?.order_data || null
+}
+
+function balanceFromPlatformOrders(stored, kinds, initialBalance, fallbackBalance) {
+  if (!stored) return fallbackBalance ?? initialBalance
+  const allowed = new Set(kinds)
+  const net = stored.reduce((sum, row) => {
+    if (!allowed.has(row.kind)) return sum
+    const item = row.item || {}
+    const stake = Number(item.stake ?? item.amount ?? 0)
+    const payout = Number(item.payout ?? 0)
+    return sum - (Number.isFinite(stake) ? stake : 0) + (Number.isFinite(payout) ? payout : 0)
+  }, initialBalance)
+  return rounded(net)
+}
+
+async function loadVirtualPointsBalance(personalId, stored = undefined) {
+  const rows = stored === undefined ? await loadPlatformOrders(personalId) : stored
+  return balanceFromPlatformOrders(rows, ['contracts', 'forecasts'], 10000, virtualBalances.get(personalId))
+}
+
+async function loadEtfDemoBalance(personalId, stored = undefined) {
+  const rows = stored === undefined ? await loadPlatformOrders(personalId) : stored
+  return balanceFromPlatformOrders(rows, ['etfOrders'], 25000, etfBalances.get(personalId))
 }
 
 async function savePlatformMember(member) {
@@ -1448,7 +1471,7 @@ app.get('/api/time-contracts', async (req, res) => {
   const itemsById = new Map((stored || []).filter(row => row.kind === 'contracts').map(row => [row.item.id, row.item]))
   for (const item of predictions.values()) if (item.personalId === personalId) itemsById.set(item.id, item)
   const items = [...itemsById.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-  res.json({ personalId, balance: virtualBalances.get(personalId) ?? 10000, contracts: items.slice(0, 20).map(publicPrediction) })
+  res.json({ personalId, balance: await loadVirtualPointsBalance(personalId, stored), contracts: items.slice(0, 20).map(publicPrediction) })
 })
 
 app.get('/api/forecasts', async (req, res) => {
@@ -1459,7 +1482,7 @@ app.get('/api/forecasts', async (req, res) => {
   const itemsById = new Map((stored || []).filter(row => row.kind === 'forecasts').map(row => [row.item.id, row.item]))
   for (const item of forecasts.values()) if (item.personalId === personalId) itemsById.set(item.id, item)
   const items = [...itemsById.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-  res.json({ personalId, balance: virtualBalances.get(personalId) ?? 10000, forecasts: items.slice(0, 50) })
+  res.json({ personalId, balance: await loadVirtualPointsBalance(personalId, stored), forecasts: items.slice(0, 50) })
 })
 
 app.post('/api/forecasts', async (req, res) => {
@@ -1480,7 +1503,7 @@ app.post('/api/forecasts', async (req, res) => {
   const key = `${personalId}:${eventId}`
   const existing = forecasts.get(key)
   if (existing && existing.status !== 'pending') return res.status(409).json({ error: '该预测已结算，不能修改或重复投入' })
-  const balance = virtualBalances.get(personalId) ?? 10000
+  const balance = await loadVirtualPointsBalance(personalId)
   if (!existing && balance < stake) return res.status(400).json({ error: '虚拟积分余额不足' })
   if (!existing) virtualBalances.set(personalId, rounded(balance - stake))
   const item = {
@@ -1508,7 +1531,7 @@ app.post('/api/forecasts', async (req, res) => {
     else { forecasts.delete(key); virtualBalances.set(personalId, balance) }
     return
   }
-  res.status(existing ? 200 : 201).json({ forecast: item, balance: virtualBalances.get(personalId) ?? 10000 })
+  res.status(existing ? 200 : 201).json({ forecast: item, balance: await loadVirtualPointsBalance(personalId) })
 })
 
 app.get('/api/etf-orders', async (req, res) => {
@@ -1518,7 +1541,7 @@ app.get('/api/etf-orders', async (req, res) => {
   const ordersById = new Map((stored || []).filter(row => row.kind === 'etfOrders').map(row => [row.item.id, row.item]))
   for (const item of etfOrders.values()) if (item.personalId === personalId) ordersById.set(item.id, item)
   const orders = [...ordersById.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-  res.json({ personalId, balance: etfBalances.get(personalId) ?? 25000, orders: orders.slice(0, 30) })
+  res.json({ personalId, balance: await loadEtfDemoBalance(personalId, stored), orders: orders.slice(0, 30) })
 })
 
 app.post('/api/etf-orders', async (req, res) => {
@@ -1537,7 +1560,7 @@ app.post('/api/etf-orders', async (req, res) => {
   if (process.env.MASSIVE_API_KEY?.trim()) await syncMarketQuotes()
   const executionPrice = marketQuotesCache.payload?.quotes?.[symbol]?.last ?? asset.last
   const amount = rounded(quantity * executionPrice)
-  const balance = etfBalances.get(personalId) ?? 25000
+  const balance = await loadEtfDemoBalance(personalId)
   if (balance < amount) return res.status(400).json({ error: '虚拟美元余额不足' })
   etfBalances.set(personalId, rounded(balance - amount))
   const item = {
@@ -1554,7 +1577,7 @@ app.post('/api/etf-orders', async (req, res) => {
     etfBalances.set(personalId, balance)
     return
   }
-  res.status(201).json({ order: item, balance: etfBalances.get(personalId) ?? 25000 })
+  res.status(201).json({ order: item, balance: await loadEtfDemoBalance(personalId) })
 })
 
 app.post('/api/time-contracts', async (req, res) => {
@@ -1572,7 +1595,7 @@ app.post('/api/time-contracts', async (req, res) => {
   if (!['up', 'down'].includes(direction) || !frontendConfig.contractDurations.includes(duration) || !Number.isInteger(amount) || amount < 10 || amount > 1000) {
     return res.status(400).json({ error: '预测方向、期限或虚拟积分金额无效' })
   }
-  const balance = virtualBalances.get(personalId) ?? 10000
+  const balance = await loadVirtualPointsBalance(personalId)
   if (balance < amount) return res.status(400).json({ error: '虚拟积分余额不足' })
   virtualBalances.set(personalId, balance - amount)
   const item = {
@@ -1607,6 +1630,8 @@ app.post('/api/time-contracts', async (req, res) => {
       item.profit = 0
       item.settledAt = new Date().toISOString()
       virtualBalances.set(item.personalId, rounded((virtualBalances.get(item.personalId) ?? 10000) + item.stake - previousPayout))
+      try { await savePlatformOrder('contracts', item) }
+      catch (error) { console.error('Unable to persist drawn time contract', error) }
     } else {
       settleContract(item, result)
     }
@@ -1619,7 +1644,7 @@ app.post('/api/time-contracts', async (req, res) => {
     contractSettlementTimers.delete(oldestId)
     predictions.delete(oldestId)
   }
-  res.status(201).json({ contract: publicPrediction(item), balance: virtualBalances.get(personalId) })
+  res.status(201).json({ contract: publicPrediction(item), balance: await loadVirtualPointsBalance(personalId) })
 })
 
 app.post('/api/kyc-submissions', (req, res) => {

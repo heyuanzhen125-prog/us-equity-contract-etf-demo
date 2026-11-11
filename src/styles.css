@@ -49,3 +49,19 @@ footer{padding-top:24px;color:#8290a0;font-size:10px}footer button{color:#a0afbe
 .forecast-choice-field{display:grid;gap:6px;margin:10px 0;color:#9ba4b0;font-size:8px}.forecast-choice-buttons{display:grid;grid-template-columns:1fr 1fr;gap:7px}.forecast-choice-buttons button{height:34px;border:1px solid #303744;border-radius:6px;background:#141922;color:#aab2be;font-size:10px;font-weight:700;letter-spacing:.5px;transition:background .15s,border-color .15s,color .15s}.forecast-choice-buttons button.yes.selected{border-color:#3c8064;background:#14251e;color:#8be0b4}.forecast-choice-buttons button.no.selected{border-color:#8a4b51;background:#29181b;color:#ff9da2}.forecast-choice-buttons button:disabled{opacity:.5;cursor:not-allowed}
 .forecast-card h3{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}.forecast-card>p{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}.forecast-more{display:block;min-height:34px;margin:12px auto 0;padding:0 14px;border:1px solid #364254;border-radius:6px;background:#151c26;color:#aac3dc;font-size:9px}.forecast-more:hover{border-color:#587493;background:#1b2734}.time-source-expiry{color:#76879a;font-size:8px}
 @media(max-width:600px){.forecast-card h3{font-size:12px}.forecast-more{width:100%;min-height:40px}.time-source-expiry{flex-basis:100%;line-height:1.4}}
+/* Compact mobile header: keep actions readable and prevent Chinese labels wrapping per character. */
+@media(max-width:600px){
+  .topbar{align-items:center;row-gap:7px}
+  .breadcrumbs{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .top-actions{width:100%;min-width:0;display:flex;flex-wrap:nowrap;justify-content:space-between;gap:5px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
+  .top-actions::-webkit-scrollbar{display:none}
+  .top-actions>.register-trigger{display:none}
+  .top-actions>.deposit-trigger,.top-actions>.withdrawal-trigger{display:flex;flex:none;white-space:nowrap}
+  .top-actions>.icon-button,.top-actions>.wallet-button{flex:none;white-space:nowrap}
+  .wallet-button b{display:none}
+  .page-heading{display:flex;align-items:flex-start;flex-wrap:wrap;gap:10px}
+  .page-heading>div:first-child{flex:1 1 100%;min-width:0}
+  .page-heading h1,.subtitle{overflow-wrap:anywhere}
+  .heading-right{flex:1 1 100%;display:flex;justify-content:flex-start;flex-wrap:wrap;gap:6px}
+  .date-label{margin-right:auto;white-space:nowrap}
+}

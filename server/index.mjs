@@ -100,6 +100,7 @@ const frontendConfig = {
   },
   minimumWithdrawal: 10,
   withdrawalFee: 0.5,
+  maxEtfLeverage: 100,
   contractDurations: [10, 30, 60],
   contractPayoutPercent: 80,
   autoPayoutEnabled: false,
@@ -472,7 +473,7 @@ function settleForecast(item, result) {
 
 function settleEtfOrder(item, result) {
   const previousPayout = item.payout || 0
-  const payout = result === 'won' ? rounded(item.amount * (1 + item.payoutPercent / 100)) : 0
+  const payout = result === 'won' ? rounded(item.amount * (1 + item.payoutPercent * (item.leverage || 1) / 100)) : 0
   item.status = result
   item.result = result
   item.payout = payout
@@ -522,15 +523,17 @@ app.patch('/api/admin/front-config', requirePermission('front-config'), (req, re
   const minimumWithdrawal = Number(input.minimumWithdrawal)
   const withdrawalFee = Number(input.withdrawalFee)
   const payout = Number(input.contractPayoutPercent)
+  const maxEtfLeverage = Number(input.maxEtfLeverage)
   const payoutMin = Number(input.payoutMinPercent)
   const payoutMax = Number(input.payoutMaxPercent)
   const payoutSensitivity = Number(input.payoutSensitivity)
-  if (![0, 15, 30, 60].includes(delay) || !Number.isFinite(minimumWithdrawal) || minimumWithdrawal < 1 || minimumWithdrawal > 100000 || !Number.isFinite(withdrawalFee) || withdrawalFee < 0 || withdrawalFee > 100 || !Number.isInteger(payout) || payout < 1 || payout > 200 || !Number.isInteger(payoutMin) || payoutMin < 1 || payoutMin > 200 || !Number.isInteger(payoutMax) || payoutMax < payoutMin || payoutMax > 200 || !Number.isInteger(payoutSensitivity) || payoutSensitivity < 0 || payoutSensitivity > 100) return res.status(400).json({ error: '行情延迟、提现限额或模拟结算参数无效' })
+  if (![0, 15, 30, 60].includes(delay) || !Number.isFinite(minimumWithdrawal) || minimumWithdrawal < 1 || minimumWithdrawal > 100000 || !Number.isFinite(withdrawalFee) || withdrawalFee < 0 || withdrawalFee > 100 || !Number.isInteger(maxEtfLeverage) || maxEtfLeverage < 1 || maxEtfLeverage > 100 || !Number.isInteger(payout) || payout < 1 || payout > 200 || !Number.isInteger(payoutMin) || payoutMin < 1 || payoutMin > 200 || !Number.isInteger(payoutMax) || payoutMax < payoutMin || payoutMax > 200 || !Number.isInteger(payoutSensitivity) || payoutSensitivity < 0 || payoutSensitivity > 100) return res.status(400).json({ error: '行情延迟、杠杆上限或模拟结算参数无效' })
   if (!Array.isArray(input.depositNetworks) || !input.depositNetworks.length || input.depositNetworks.some(network => !frontendConfig.depositNetworks.includes(network))) return res.status(400).json({ error: '请选择至少一个支持的演示网络' })
   if (!Array.isArray(input.contractDurations) || !input.contractDurations.length || input.contractDurations.length > 20 || input.contractDurations.some(duration => !Number.isInteger(Number(duration)) || Number(duration) < 5 || Number(duration) > 3600)) return res.status(400).json({ error: '合约期限需为 5–3600 秒之间的整数，最多 20 项' })
   frontendConfig.marketDelayMinutes = delay
   frontendConfig.minimumWithdrawal = rounded(minimumWithdrawal)
   frontendConfig.withdrawalFee = rounded(withdrawalFee)
+  frontendConfig.maxEtfLeverage = maxEtfLeverage
   frontendConfig.contractPayoutPercent = payout
   frontendConfig.payoutMinPercent = payoutMin
   frontendConfig.payoutMaxPercent = payoutMax
@@ -678,7 +681,7 @@ app.get('/api/admin/orders', requirePermission('prediction-preview'), (_req, res
   })
   const equityOrders = [...etfOrders.values()].map(item => ({
     id: item.id, kind: 'etfOrders', personalId: item.personalId, symbol: item.symbol,
-    direction: item.side, quantity: item.quantity, stake: item.amount, payoutPercent: item.payoutPercent,
+    direction: item.side, quantity: item.quantity, leverage: item.leverage || 1, exposureAmount: item.exposureAmount || item.amount, stake: item.amount, payoutPercent: item.payoutPercent,
     status: item.status, result: item.result, profit: item.profit, createdAt: item.createdAt,
   }))
   const orders = [...contracts, ...forecastOrders, ...equityOrders]
@@ -927,9 +930,10 @@ app.post('/api/etf-orders', (req, res) => {
   if (!frontendConfig.demoOrdersEnabled) return res.status(403).json({ error: '后台已暂停模拟下单' })
   const { personalId, symbol, side, orderType = 'market' } = req.body || {}
   const quantity = Number(req.body?.quantity)
+  const leverage = Number(req.body?.leverage ?? 1)
   if (!validPersonalId(personalId)) return res.status(400).json({ error: '请先注册并绑定个人 ID' })
   if (typeof symbol !== 'string' || typeof side !== 'string' || !['buy', 'sell'].includes(side) ||
-      !['market', 'limit'].includes(orderType) || !Number.isInteger(quantity) || quantity < 1 || quantity > 10000) {
+      !['market', 'limit'].includes(orderType) || !Number.isInteger(quantity) || quantity < 1 || quantity > 10000 || !Number.isInteger(leverage) || leverage < 1 || leverage > frontendConfig.maxEtfLeverage) {
     return res.status(400).json({ error: '模拟订单代码、方向、类型或股数无效' })
   }
   const asset = frontendConfig.marketAssets.find(item => item.symbol === symbol)
@@ -940,7 +944,7 @@ app.post('/api/etf-orders', (req, res) => {
   etfBalances.set(personalId, rounded(balance - amount))
   const item = {
     id: randomUUID(), personalId, symbol: asset.symbol, name: asset.name, side, orderType, quantity,
-    price: asset.last, amount, payoutPercent: frontendConfig.contractPayoutPercent,
+    price: asset.last, amount, leverage, exposureAmount: rounded(amount * leverage), payoutPercent: frontendConfig.contractPayoutPercent,
     status: 'pending', result: null, payout: null, profit: null,
     createdAt: new Date().toISOString(), settledAt: null,
   }

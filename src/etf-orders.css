@@ -9,3 +9,11 @@
 .etf-order-row>span.pending{color:#e2c36d}
 .etf-order-row>span.won{color:#77d7a5}
 .etf-order-row>span.lost{color:#f18b8f}
+.leverage-control{display:grid;gap:6px;margin:10px 0;padding:9px 10px;border:1px solid #29313d;border-radius:7px;background:#111720}
+.leverage-control>label,.leverage-control>div{display:flex;align-items:center;justify-content:space-between;color:#8993a1;font-size:9px}
+.leverage-control>label b{color:#b9a9ff;font-size:12px}
+.leverage-control input{width:100%;accent-color:#9b8cf1}
+.leverage-estimate{display:grid;gap:6px;margin:9px 0;padding:9px 10px;border:1px solid #29313d;border-radius:7px;background:#111720}
+.leverage-estimate>div{display:flex;justify-content:space-between;gap:8px;color:#8993a1;font-size:9px}
+.leverage-estimate>div b{color:#d8dce4;font-weight:600;text-align:right}
+.leverage-estimate>small{color:#778291;font-size:8px;line-height:1.5}

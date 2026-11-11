@@ -14,6 +14,8 @@ type Order = {
   direction?: string
   durationSeconds?: number
   quantity?: number
+  leverage?: number
+  exposureAmount?: number
   probability?: number
   stake: number
   payoutPercent: number
@@ -213,8 +215,8 @@ export default function AdminPredictionPreviewView({ adminKey }: { adminKey: str
             <div className="admin-order-title"><b>{kindName[order.kind]}</b><span>{order.symbol}</span><em className={`admin-order-status ${order.status}`}>{order.status === 'pending' ? '待处理' : order.status === 'won' ? '赢' : order.status === 'lost' ? '输' : '平局'}</em></div>
             <div className="admin-order-meta">
               <span>个人 ID：{order.personalId}</span>
-              <span>{order.kind === 'contracts' ? `${order.direction === 'up' ? '看涨' : '看跌'} · ${order.durationSeconds} 秒` : order.kind === 'etfOrders' ? `${order.direction === 'buy' ? '买入' : '卖出'} · ${order.quantity} 股` : `概率 ${order.probability}%`}</span>
-              <span>投入 {formatAmount(order.stake)} {order.kind === 'etfOrders' ? 'USD' : 'PTS'}</span>
+              <span>{order.kind === 'contracts' ? `${order.direction === 'up' ? '看涨' : '看跌'} · ${order.durationSeconds} 秒` : order.kind === 'etfOrders' ? `${order.direction === 'buy' ? '买入' : '卖出'} · ${order.quantity} 股 · ${order.leverage || 1}×` : `概率 ${order.probability}%`}</span>
+              <span>{order.kind === 'etfOrders' ? `保证金 ${formatAmount(order.stake)} USD · 名义金额 ${formatAmount(order.exposureAmount || order.stake)} USD` : `投入 ${formatAmount(order.stake)} PTS`}</span>
               <span>{new Date(order.createdAt).toLocaleString('zh-CN')}</span>
               {order.profit !== null && <span>盈亏 {order.profit > 0 ? '+' : ''}{formatAmount(order.profit)} {order.kind === 'etfOrders' ? 'USD' : 'PTS'}</span>}
             </div>

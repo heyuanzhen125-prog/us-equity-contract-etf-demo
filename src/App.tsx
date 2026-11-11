@@ -8,7 +8,7 @@ import './etf-orders.css'
 
 type Asset = { symbol: string; name: string; last: number; change: number; volume: string; type: string; color: string; spark: number[] }
 type DemoProject = { id: string; symbol: string; name: string; startPrice: number; lastPrice: number; targetChangePct: number; curve: number[]; simulated: true }
-type EtfOrder = { id: string; symbol: string; name: string; side: 'buy' | 'sell'; quantity: number; price: number; amount: number; status: 'pending' | 'won' | 'lost'; result: 'won' | 'lost' | null; payout: number | null; profit: number | null; createdAt: string }
+type EtfOrder = { id: string; symbol: string; name: string; side: 'buy' | 'sell'; quantity: number; price: number; amount: number; leverage?: number; exposureAmount?: number; status: 'pending' | 'won' | 'lost'; result: 'won' | 'lost' | null; payout: number | null; profit: number | null; createdAt: string }
 type WalletTransaction = { id: string; personalId: string; type: 'deposit' | 'withdrawal'; amount: number; fee: number; network: string; addressMasked: string; status: 'completed' | 'pending' | 'rejected'; reason: string; createdAt: string; reviewedAt: string | null }
 const assets: Asset[] = [
   { symbol: 'NVDA', name: '英伟达', last: 142.87, change: 2.46, volume: '3.42B', type: '2× 多头', color: '#84d6b2', spark: [13, 17, 15, 22, 20, 26, 23, 30, 27, 35, 31, 40, 38, 47] },
@@ -34,8 +34,8 @@ const defaultUiText = {
   buyAction: '买入', sellAction: '卖出', riskDisclosure: '风险披露',
 }
 type UiText = typeof defaultUiText
-type FrontConfig = { uiText: UiText; marketAssets: Asset[]; marketIndices: MarketIndex[]; siteName: string; marketSubtitle: string; marketDelayMinutes: number; homeTitle: string; equityContractTitle: string; equityContractSubtitle: string; timeContractTitle: string; timeContractSubtitle: string; predictionTitle: string; predictionSubtitle: string; indexTitle: string; indexSubtitle: string; featuredTitle: string; featuredSubtitle: string; demoProjectTitle: string; demoProjectSubtitle: string; orderDisclaimer: string; showMarketOverview: boolean; showEquityContracts: boolean; showTimeContracts: boolean; showPrediction: boolean; showDeposit: boolean; showWithdrawal: boolean; showKyc: boolean; demoOrdersEnabled: boolean; showMarketPicks: boolean; showDemoProjects: boolean; showQuickOrder: boolean; showWatchlistNav: boolean; showPositionsNav: boolean; showNewsNav: boolean; showCalendarNav: boolean; showHelpNav: boolean; showSettingsNav: boolean; depositNetworks: string[]; minimumWithdrawal: number; withdrawalFee: number; contractDurations: number[]; contractPayoutPercent: number; autoPayoutEnabled: boolean; payoutMinPercent: number; payoutMaxPercent: number; payoutSensitivity: number }
-const defaultFrontConfig: FrontConfig = { uiText: defaultUiText, marketAssets: assets, marketIndices: [{s:'S&P 500',v:'6,812.34',c:'+0.74%'},{s:'纳斯达克',v:'23,104.61',c:'+1.12%'},{s:'道琼斯',v:'47,862.19',c:'+0.28%'},{s:'VIX',v:'18.42',c:'−2.16%',down:true}], siteName: 'Northstar Markets', marketSubtitle: '查看指数概况与后台发布的模拟项目。', homeTitle: '市场概览', equityContractTitle: '合约 ETF', equityContractSubtitle: '浏览美股与杠杆 ETF 模拟行情，并使用虚拟账户体验下单。', timeContractTitle: '时间合约', timeContractSubtitle: '设定标的、方向与到期时间，体验独立的时间合约模拟。', predictionTitle: '预测系统', predictionSubtitle: '围绕事件问题记录概率判断，查看个人预测，不与时间合约共用订单。', indexTitle: '美股主要指数', indexSubtitle: '延时行情 · 仅供展示', featuredTitle: '市场精选', featuredSubtitle: '查看热门标的与当日表现', demoProjectTitle: '模拟项目', demoProjectSubtitle: '由后台发布的虚拟标的 · SIM 前缀 · 非实盘行情', orderDisclaimer: '杠杆 ETF 可能放大损失 · 本平台为原型演示', marketDelayMinutes: 15, showMarketOverview: true, showEquityContracts: true, showTimeContracts: true, showPrediction: true, showDeposit: true, showWithdrawal: true, showKyc: true, demoOrdersEnabled: true, showMarketPicks: true, showDemoProjects: true, showQuickOrder: true, showWatchlistNav: true, showPositionsNav: true, showNewsNav: true, showCalendarNav: true, showHelpNav: true, showSettingsNav: true, depositNetworks: ['TRC20', 'ERC20', 'Polygon'], minimumWithdrawal: 10, withdrawalFee: 0.5, contractDurations: [10, 30, 60], contractPayoutPercent: 80, autoPayoutEnabled: false, payoutMinPercent: 50, payoutMaxPercent: 120, payoutSensitivity: 30 }
+type FrontConfig = { uiText: UiText; marketAssets: Asset[]; marketIndices: MarketIndex[]; siteName: string; marketSubtitle: string; marketDelayMinutes: number; homeTitle: string; equityContractTitle: string; equityContractSubtitle: string; timeContractTitle: string; timeContractSubtitle: string; predictionTitle: string; predictionSubtitle: string; indexTitle: string; indexSubtitle: string; featuredTitle: string; featuredSubtitle: string; demoProjectTitle: string; demoProjectSubtitle: string; orderDisclaimer: string; showMarketOverview: boolean; showEquityContracts: boolean; showTimeContracts: boolean; showPrediction: boolean; showDeposit: boolean; showWithdrawal: boolean; showKyc: boolean; demoOrdersEnabled: boolean; showMarketPicks: boolean; showDemoProjects: boolean; showQuickOrder: boolean; showWatchlistNav: boolean; showPositionsNav: boolean; showNewsNav: boolean; showCalendarNav: boolean; showHelpNav: boolean; showSettingsNav: boolean; depositNetworks: string[]; minimumWithdrawal: number; withdrawalFee: number; maxEtfLeverage: number; contractDurations: number[]; contractPayoutPercent: number; autoPayoutEnabled: boolean; payoutMinPercent: number; payoutMaxPercent: number; payoutSensitivity: number }
+const defaultFrontConfig: FrontConfig = { uiText: defaultUiText, marketAssets: assets, marketIndices: [{s:'S&P 500',v:'6,812.34',c:'+0.74%'},{s:'纳斯达克',v:'23,104.61',c:'+1.12%'},{s:'道琼斯',v:'47,862.19',c:'+0.28%'},{s:'VIX',v:'18.42',c:'−2.16%',down:true}], siteName: 'Northstar Markets', marketSubtitle: '查看指数概况与后台发布的模拟项目。', homeTitle: '市场概览', equityContractTitle: '合约 ETF', equityContractSubtitle: '浏览美股与杠杆 ETF 模拟行情，并使用虚拟账户体验下单。', timeContractTitle: '时间合约', timeContractSubtitle: '设定标的、方向与到期时间，体验独立的时间合约模拟。', predictionTitle: '预测系统', predictionSubtitle: '围绕事件问题记录概率判断，查看个人预测，不与时间合约共用订单。', indexTitle: '美股主要指数', indexSubtitle: '延时行情 · 仅供展示', featuredTitle: '市场精选', featuredSubtitle: '查看热门标的与当日表现', demoProjectTitle: '模拟项目', demoProjectSubtitle: '由后台发布的虚拟标的 · SIM 前缀 · 非实盘行情', orderDisclaimer: '杠杆 ETF 可能放大损失 · 本平台为原型演示', marketDelayMinutes: 15, showMarketOverview: true, showEquityContracts: true, showTimeContracts: true, showPrediction: true, showDeposit: true, showWithdrawal: true, showKyc: true, demoOrdersEnabled: true, showMarketPicks: true, showDemoProjects: true, showQuickOrder: true, showWatchlistNav: true, showPositionsNav: true, showNewsNav: true, showCalendarNav: true, showHelpNav: true, showSettingsNav: true, depositNetworks: ['TRC20', 'ERC20', 'Polygon'], minimumWithdrawal: 10, withdrawalFee: 0.5, maxEtfLeverage: 100, contractDurations: [10, 30, 60], contractPayoutPercent: 80, autoPayoutEnabled: false, payoutMinPercent: 50, payoutMaxPercent: 120, payoutSensitivity: 30 }
 
 function Spark({ points, color, large = false }: { points: number[]; color: string; large?: boolean }) {
   const coords = points.map((n, i) => `${(i / (points.length - 1)) * 800},${large ? 160 - n * 2.8 : 50 - n}`).join(' ')
@@ -57,6 +57,7 @@ export default function App() {
   const [search, setSearch] = useState('')
   const [side, setSide] = useState<'买入' | '卖出'>('买入')
   const [qty, setQty] = useState('10')
+  const [etfLeverage, setEtfLeverage] = useState(1)
   const [price, setPrice] = useState('市价')
   const [toast, setToast] = useState('')
   const [watch, setWatch] = useState<string[]>(['NVDA', 'SPY'])
@@ -203,13 +204,13 @@ export default function App() {
       const response = await fetch('/api/etf-orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ personalId, symbol: selected.symbol, side: side === '买入' ? 'buy' : 'sell', orderType: price === '限价' ? 'limit' : 'market', quantity }),
+        body: JSON.stringify({ personalId, symbol: selected.symbol, side: side === '买入' ? 'buy' : 'sell', orderType: price === '限价' ? 'limit' : 'market', quantity, leverage: Math.min(etfLeverage, frontConfig.maxEtfLeverage) }),
       })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || '模拟订单提交失败')
       setEtfBalance(result.balance)
       setEtfOrders(items => [result.order, ...items.filter(item => item.id !== result.order.id)].slice(0, 30))
-      notify(result.order.status === 'pending' ? `模拟${side}单已提交：${selected.symbol} × ${quantity}，等待后台结果` : `模拟订单已按后台规则结算：${result.order.status === 'won' ? '赢' : '输'}`)
+      notify(result.order.status === 'pending' ? `模拟${side}单已提交：${selected.symbol} × ${quantity} · ${result.order.leverage}×，等待后台结果` : `模拟订单已按后台规则结算：${result.order.status === 'won' ? '赢' : '输'}`)
     } catch (error) {
       notify(error instanceof Error ? error.message : '模拟订单服务暂不可用')
     } finally {
@@ -379,15 +380,16 @@ export default function App() {
               </div>
               <label className="field-label">订单类型</label>
               <button className="select-field" onClick={()=>setPrice(price==='市价'?'限价':'市价')}>{price} <ChevronDown size={14}/></button>
+              <div className="leverage-control"><label htmlFor="etf-leverage">杠杆倍数 <b>{Math.min(etfLeverage,frontConfig.maxEtfLeverage)}×</b></label><input id="etf-leverage" type="range" min="1" max={frontConfig.maxEtfLeverage} step="1" value={Math.min(etfLeverage,frontConfig.maxEtfLeverage)} onChange={event=>setEtfLeverage(Number(event.target.value))}/><div><span>1×</span><span>最高 {frontConfig.maxEtfLeverage}×</span></div></div>
               <div className="input-label"><span>数量</span><span>可用 ${fmt(etfBalance)}</span></div>
               <div className="qty-field"><input value={qty} onChange={e=>setQty(e.target.value.replace(/[^0-9]/g,''))}/><span>股</span><div><button onClick={()=>setQty(String(Math.max(1,Number(qty)-1)))}>−</button><button onClick={()=>setQty(String(Number(qty)+1))}>+</button></div></div>
-              <div className="estimate"><span>预估金额</span><b>${fmt((Number(qty)||0)*selected.last)}</b></div>
+              <div className="leverage-estimate"><div><span>订单保证金</span><b>${fmt((Number(qty)||0)*selected.last)}</b></div><div><span>模拟持仓名义金额</span><b>${fmt((Number(qty)||0)*selected.last*Math.min(etfLeverage,frontConfig.maxEtfLeverage))}</b></div><small>若按后台规则判赢，模拟收益约 ${fmt((Number(qty)||0)*selected.last*frontConfig.contractPayoutPercent/100*Math.min(etfLeverage,frontConfig.maxEtfLeverage))}；判输时扣除订单保证金。</small></div>
               <button className={`submit-order ${side==='卖出'?'submit-sell':''}`} onClick={() => void submitOrder()} disabled={!frontConfig.demoOrdersEnabled||etfOrderBusy}>{etfOrderBusy?'提交中…':frontConfig.demoOrdersEnabled?`${side} ${selected.symbol}`:'后台已暂停下单'}</button>
-              <div className="order-note"><ShieldCheck size={13}/> {frontConfig.orderDisclaimer} · 订单输赢由后台 SIM 规则控制</div>
+              <div className="order-note"><ShieldCheck size={13}/> {frontConfig.orderDisclaimer} · 杠杆与收益仅为模拟数值，订单结果由后台规则控制</div>
               {personalId&&<div className="etf-order-history">
                 <div className="etf-order-history-head"><b>我的模拟订单</b><span>{etfOrders.length} 条</span></div>
                 {etfOrders.length===0?<small>尚无模拟订单</small>:etfOrders.slice(0,5).map(order=><div className="etf-order-row" key={order.id}>
-                  <div><b>{order.symbol} · {order.side==='buy'?'买入':'卖出'} × {order.quantity}</b><small>{new Date(order.createdAt).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})} · ${fmt(order.amount)}</small></div>
+                  <div><b>{order.symbol} · {order.side==='buy'?'买入':'卖出'} × {order.quantity} · {order.leverage||1}×</b><small>{new Date(order.createdAt).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})} · 保证金 ${fmt(order.amount)} · 名义金额 ${fmt(order.exposureAmount||order.amount)}</small></div>
                   <span className={order.status}>{order.status==='pending'?'待处理':order.status==='won'?`赢 +$${fmt(order.profit||0)}`:`输 −$${fmt(order.amount)}`}</span>
                 </div>)}
               </div>}

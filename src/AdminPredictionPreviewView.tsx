@@ -37,6 +37,15 @@ const resultName = (result: Result | null) => result === 'won' ? '全赢' : resu
 const kindName: Record<Kind, string> = { contracts: '时间合约', forecasts: '事件预测', etfOrders: '合约 ETF' }
 const formatAmount = (value: number) => value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
+async function readAdminJson<T>(response: Response, label: string): Promise<T> {
+  const text = await response.text()
+  let data: T
+  try { data = JSON.parse(text) as T }
+  catch { throw new Error(`${label}接口返回了非 JSON 响应（HTTP ${response.status}），请刷新页面重试`) }
+  if (!response.ok) throw new Error((data as { error?: string })?.error || `${label}请求失败（HTTP ${response.status}）`)
+  return data
+}
+
 export default function AdminPredictionPreviewView({ adminKey }: { adminKey: string }) {
   const [snapshot, setSnapshot] = useState<ControlsSnapshot>({
     policies: { contracts: emptyPolicy, forecasts: emptyPolicy, etfOrders: emptyPolicy },
@@ -66,17 +75,9 @@ export default function AdminPredictionPreviewView({ adminKey }: { adminKey: str
         fetch('/api/admin/outcome-controls', { headers, signal }),
         fetch('/api/admin/orders', { headers, signal }),
       ])
-      const readJson = async <T,>(response: Response, label: string): Promise<T> => {
-        const text = await response.text()
-        let data: T
-        try { data = JSON.parse(text) as T }
-        catch { throw new Error(`${label}接口返回了非 JSON 响应（HTTP ${response.status}），请刷新页面重试`) }
-        if (!response.ok) throw new Error((data as { error?: string })?.error || `${label}请求失败（HTTP ${response.status}）`)
-        return data
-      }
       const [controls, orderData] = await Promise.all([
-        readJson<ControlsSnapshot>(controlsResponse, '输赢控制'),
-        readJson<{ orders: Order[] }>(ordersResponse, '订单列表'),
+        readAdminJson<ControlsSnapshot>(controlsResponse, '输赢控制'),
+        readAdminJson<{ orders: Order[] }>(ordersResponse, '订单列表'),
       ])
       setSnapshot(controls)
       setOrders(orderData.orders)
@@ -110,12 +111,10 @@ export default function AdminPredictionPreviewView({ adminKey }: { adminKey: str
         headers: { 'Content-Type': 'application/json', 'x-admin-key': adminKey },
         body: JSON.stringify({ target, result }),
       })
-      const data = await response.json()
-      if (!response.ok) throw new Error(data.error || '保存输赢规则失败')
+      const data = await readAdminJson<ControlsSnapshot & { affected: number }>(response, '保存输赢规则')
       setSnapshot(data)
       const ordersResponse = await fetch('/api/admin/orders', { headers: { 'x-admin-key': adminKey } })
-      const orderData = await ordersResponse.json()
-      if (!ordersResponse.ok) throw new Error(orderData.error || '读取订单列表失败')
+      const orderData = await readAdminJson<{ orders: Order[] }>(ordersResponse, '订单列表')
       setOrders(orderData.orders)
       const targetName = target === 'all' ? '全部虚拟账号' : target
       const resultNameText = result === 'won' ? '赢' : result === 'lost' ? '输' : '清除结果规则'
@@ -141,14 +140,12 @@ export default function AdminPredictionPreviewView({ adminKey }: { adminKey: str
         headers: { 'Content-Type': 'application/json', 'x-admin-key': adminKey },
         body: JSON.stringify({ result }),
       })
-      const data = await response.json()
-      if (!response.ok) throw new Error(data.error || '设置订单结果失败')
+      const data = await readAdminJson<{ order: Order }>(response, '设置订单结果')
       setOrders(current => current.map(item => item.id === order.id ? { ...item, ...data.order } : item))
       const before = order.status === 'won' ? '赢' : order.status === 'lost' ? '输' : order.status === 'draw' ? '平局' : '待处理'
       setNotice(`${kindName[order.kind]}订单 ${order.id.slice(0, 8)}：${before} → ${result === 'won' ? '赢' : '输'}。虚拟余额已按最新结果重新结算。`)
       const controlsResponse = await fetch('/api/admin/outcome-controls', { headers: { 'x-admin-key': adminKey } })
-      const controls = await controlsResponse.json()
-      if (!controlsResponse.ok) throw new Error(controls.error || '刷新输赢控制状态失败')
+      const controls = await readAdminJson<ControlsSnapshot>(controlsResponse, '刷新输赢控制状态')
       setSnapshot(controls)
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : '设置订单结果失败')

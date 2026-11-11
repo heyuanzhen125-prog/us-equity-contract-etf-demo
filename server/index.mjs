@@ -1,5 +1,5 @@
 import express from 'express'
-import { createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
 import { calculateCpmmPurchase, getCpmmProbability } from './prediction-market.mjs'
 
 const app = express()
@@ -23,6 +23,7 @@ const adminSessions = new Map()
 const agents = new Map()
 const agentRegistrations = new Map()
 let exchangeEventsCache = { expiresAt: 0, payload: null }
+const syncedExchangeEvents = new Map()
 const permissionModules = [
   { id: 'kyc', name: 'KYC 身份审核' },
   { id: 'wallet', name: 'USDT 资金流水' },
@@ -493,7 +494,7 @@ function validProjectInput({ symbol, name, startPrice, targetChangePct }) {
 }
 
 function publicForecastEvents() {
-  return forecastEvents.map(event => {
+  return [...forecastEvents, ...syncedExchangeEvents.values()].map(event => {
     const submissions = [...forecasts.values()].filter(item => item.eventId === event.id)
     const liquidity = 10000
     let pool = {
@@ -515,10 +516,9 @@ function publicForecastEvents() {
 }
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'northstar-local-api' }))
-// Read-only exchange reference feed. Each adapter normalizes venue data into
-// the same event/market shape; local demo predictions remain independent.
-app.get('/api/exchange-events', async (_req, res) => {
-  if (exchangeEventsCache.payload && exchangeEventsCache.expiresAt > Date.now()) return res.json(exchangeEventsCache.payload)
+// Keep external discovery separate from this platform's own prediction orders.
+async function syncExchangeEvents() {
+  if (exchangeEventsCache.payload && exchangeEventsCache.expiresAt > Date.now()) return exchangeEventsCache.payload
   const settled = []
   const fetchJson = async (url) => {
     const response = await fetch(url, { signal: AbortSignal.timeout(8000), headers: { accept: 'application/json' } })
@@ -550,11 +550,30 @@ app.get('/api/exchange-events', async (_req, res) => {
     try { settled.push({ ok: true, items: await adapter() }) }
     catch (error) { settled.push({ ok: false, error: error instanceof Error ? error.message : 'provider unavailable', items: [] }) }
   }))
-  const items = settled.flatMap(result => result.items).sort((a, b) => b.volume - a.volume).slice(0, 60)
+  const items = settled.flatMap(result => result.items).sort((a, b) => b.volume - a.volume).slice(0, 60).map(item => ({
+    ...item,
+    platformEventId: `EVT-X-${createHash('sha256').update(item.id).digest('hex').slice(0, 12).toUpperCase()}`,
+  }))
+  syncedExchangeEvents.clear()
+  for (const item of items) syncedExchangeEvents.set(item.platformEventId, {
+    id: item.platformEventId,
+    category: item.category,
+    question: item.question,
+    description: `同步自 ${item.exchange}；此平台的下单与余额使用本平台模拟积分。交易所参考概率 ${item.probability}%。`,
+    consensus: item.probability,
+    horizon: item.endTime ? new Date(item.endTime).toLocaleString('zh-CN') : '交易所市场开放中',
+    volume: `${Math.round(item.volume).toLocaleString('en-US')}（交易所）`,
+    rewardPercent: 80,
+    sourceExchange: item.exchange,
+    sourceUrl: item.url,
+    sourceProbability: item.probability,
+    externalMarketId: item.id,
+  })
   const payload = { items, sources: { Polymarket: settled[0]?.ok || false, Kalshi: settled[1]?.ok || false }, updatedAt: new Date().toISOString(), readOnly: true }
   exchangeEventsCache = { payload, expiresAt: Date.now() + 30000 }
-  res.json(payload)
-})
+  return payload
+}
+app.get('/api/exchange-events', async (_req, res) => res.json(await syncExchangeEvents()))
 app.get('/api/public-config', (_req, res) => res.json({ config: frontendConfig, forecastEvents: publicForecastEvents() }))
 app.get('/api/forecast-events', (_req, res) => res.json({ events: publicForecastEvents() }))
 app.get('/api/admin/front-config', requirePermission('front-config'), (_req, res) => res.json({ config: frontendConfig, forecastEvents }))
@@ -944,13 +963,17 @@ app.get('/api/forecasts', (req, res) => {
   res.json({ personalId, balance: virtualBalances.get(personalId) ?? 10000, forecasts: items.slice(0, 50) })
 })
 
-app.post('/api/forecasts', (req, res) => {
+app.post('/api/forecasts', async (req, res) => {
   if (!frontendConfig.showPrediction) return res.status(403).json({ error: '后台已关闭预测系统' })
   const { personalId, eventId, probability, rationale = '' } = req.body || {}
   const stake = Number(req.body?.stake)
   if (!validPersonalId(personalId)) return res.status(400).json({ error: '请先注册并绑定个人 ID' })
   if (typeof eventId !== 'string' || !/^EVT-[A-Z0-9-]{3,30}$/.test(eventId)) return res.status(400).json({ error: '预测事件无效' })
-  const event = forecastEvents.find(item => item.id === eventId)
+  let event = forecastEvents.find(item => item.id === eventId) || syncedExchangeEvents.get(eventId)
+  if (!event && /^EVT-X-[A-F0-9]{12}$/.test(eventId)) {
+    try { await syncExchangeEvents() } catch {}
+    event = syncedExchangeEvents.get(eventId)
+  }
   if (!event) return res.status(404).json({ error: '未找到该模拟预测事件' })
   const value = Number(probability)
   if (!Number.isInteger(value) || value < 1 || value > 99 || !Number.isInteger(stake) || stake < 10 || stake > 1000 || typeof rationale !== 'string' || rationale.length > 280) return res.status(400).json({ error: '概率范围为 1–99%，虚拟积分投入为 10–1000，说明最多 280 字' })

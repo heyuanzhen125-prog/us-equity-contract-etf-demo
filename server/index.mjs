@@ -1,5 +1,6 @@
 import express from 'express'
 import { createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
+import { calculateCpmmPurchase, getCpmmProbability } from './prediction-market.mjs'
 
 const app = express()
 const submissions = new Map()
@@ -493,10 +494,22 @@ function validProjectInput({ symbol, name, startPrice, targetChangePct }) {
 function publicForecastEvents() {
   return forecastEvents.map(event => {
     const submissions = [...forecasts.values()].filter(item => item.eventId === event.id)
-    const communityConsensus = submissions.length
-      ? Math.round(submissions.reduce((sum, item) => sum + item.probability, 0) / submissions.length)
-      : null
-    return { ...event, communityConsensus, predictionCount: submissions.length }
+    const liquidity = 10000
+    let pool = {
+      YES: liquidity * (1 - event.consensus / 100),
+      NO: liquidity * (event.consensus / 100),
+    }
+    for (const item of submissions.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))) {
+      try {
+        pool = calculateCpmmPurchase(pool, 0.5, item.stake, item.probability >= 50 ? 'YES' : 'NO').newPool
+      } catch {
+        // If an extreme sequence exhausts floating-point precision, keep the
+        // last valid quote so one thin event does not break the public config.
+        break
+      }
+    }
+    const marketProbability = Math.round(getCpmmProbability(pool, 0.5) * 100)
+    return { ...event, marketProbability: Math.max(1, Math.min(99, marketProbability)), predictionCount: submissions.length }
   })
 }
 

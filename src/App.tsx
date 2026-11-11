@@ -10,6 +10,10 @@ type Asset = { symbol: string; name: string; last: number; change: number; volum
 type DemoProject = { id: string; symbol: string; name: string; startPrice: number; lastPrice: number; targetChangePct: number; curve: number[]; simulated: true; sourceExchange?: string; sourceUrl?: string; sourceExpiry?: string; sourceTicker?: string }
 type EtfOrder = { id: string; symbol: string; name: string; side: 'buy' | 'sell'; quantity: number; price: number; amount: number; leverage?: number; exposureAmount?: number; status: 'pending' | 'won' | 'lost'; result: 'won' | 'lost' | null; payout: number | null; profit: number | null; createdAt: string }
 type WalletTransaction = { id: string; personalId: string; type: 'deposit' | 'withdrawal'; amount: number; fee: number; network: string; addressMasked: string; status: 'completed' | 'pending' | 'rejected'; reason: string; createdAt: string; reviewedAt: string | null }
+type TimeContractBill = { id: string; projectSymbol: string; direction: 'up' | 'down'; durationSeconds: number; stake: number; payoutPercent: number; status: 'pending' | 'won' | 'lost' | 'draw'; profit: number | null; createdAt: string; settledAt: string | null }
+type ForecastBill = { id: string; eventId: string; choice: 'YES' | 'NO'; probability: number; stake: number; rewardPercent: number; status: 'pending' | 'won' | 'lost'; profit: number | null; updatedAt: string; settledAt: string | null }
+type LedgerCategory = 'all' | 'deposit' | 'withdrawal' | 'etf' | 'time' | 'forecast'
+type LedgerBill = { id: string; category: Exclude<LedgerCategory, 'all'>; title: string; description: string; amount: number; currency: 'USDT' | 'USD' | 'PTS'; status: string; createdAt: string; profit?: number | null }
 const assets: Asset[] = [
   { symbol: 'NVDA', name: '英伟达', last: 142.87, change: 2.46, volume: '3.42B', type: '2× 多头', color: '#84d6b2', spark: [13, 17, 15, 22, 20, 26, 23, 30, 27, 35, 31, 40, 38, 47] },
   { symbol: 'TSLA', name: '特斯拉', last: 338.11, change: -1.28, volume: '2.18B', type: '2× 多头', color: '#fc8082', spark: [44, 39, 42, 35, 38, 31, 34, 28, 32, 24, 27, 21, 25, 20] },
@@ -69,6 +73,10 @@ export default function App() {
   const [walletBalance, setWalletBalance] = useState(0)
   const [walletTransactions, setWalletTransactions] = useState<WalletTransaction[]>([])
   const [walletBusy, setWalletBusy] = useState(false)
+  const [timeContractBills, setTimeContractBills] = useState<TimeContractBill[]>([])
+  const [forecastBills, setForecastBills] = useState<ForecastBill[]>([])
+  const [ledgerCategory, setLedgerCategory] = useState<LedgerCategory>('all')
+  const [ledgerBusy, setLedgerBusy] = useState(false)
   const [etfBalance, setEtfBalance] = useState(25000)
   const [etfOrders, setEtfOrders] = useState<EtfOrder[]>([])
   const [etfOrderBusy, setEtfOrderBusy] = useState(false)
@@ -126,6 +134,27 @@ export default function App() {
       setWalletTransactions(result.transactions || [])
     } catch { /* the local API may still be starting */ }
   }
+  async function refreshLedger() {
+    if (!personalId) return
+    setLedgerBusy(true)
+    const read = async (path: string) => {
+      const response = await fetch(`${path}${path.includes('?') ? '&' : '?'}personalId=${encodeURIComponent(personalId)}`)
+      return response.ok ? response.json() : null
+    }
+    try {
+      const [wallet, etf, time, forecast] = await Promise.all([
+        read('/api/wallet'), read('/api/etf-orders'), read('/api/time-contracts'), read('/api/forecasts'),
+      ])
+      if (wallet) { setWalletBalance(wallet.balance || 0); setWalletTransactions(wallet.transactions || []) }
+      if (etf) { setEtfOrders(etf.orders || []); setEtfBalance(etf.balance ?? 25000) }
+      if (time) setTimeContractBills(time.contracts || [])
+      if (forecast) setForecastBills(forecast.forecasts || [])
+    } catch { notify('账单记录暂时无法刷新，请稍后重试') }
+    finally { setLedgerBusy(false) }
+  }
+  useEffect(() => {
+    if (workspaceView === 'account' && personalId) void refreshLedger()
+  }, [workspaceView, personalId])
   useVisiblePolling(async signal => {
     if (!personalId) return
     try {
@@ -362,6 +391,13 @@ export default function App() {
     if (referralCode) setReferralCode('')
   }
   const kycStatusLabel = kycStatus === 'verified' ? '已认证' : kycStatus === 'pending' ? '审核中' : kycStatus === 'rejected' ? '需补充' : '未认证'
+  const ledgerItems = useMemo<LedgerBill[]>(() => [
+    ...walletTransactions.map(row => ({ id: row.id, category: row.type, title: row.type === 'deposit' ? 'USDT 充值' : 'USDT 提现', description: `${row.network}${row.addressMasked ? ` · ${row.addressMasked}` : ''}${row.fee ? ` · 手续费 ${fmt(row.fee)} USDT` : ''}`, amount: row.type === 'deposit' ? row.amount : -row.amount, currency: 'USDT' as const, status: row.status === 'completed' ? '已完成' : row.status === 'pending' ? '审核中' : '已驳回', createdAt: row.createdAt })),
+    ...etfOrders.map(row => ({ id: row.id, category: 'etf' as const, title: `${row.side === 'buy' ? '买入' : '卖出'} ${row.symbol}`, description: `${row.quantity} 股 · ${row.leverage || 1}× 杠杆 · 保证金 ${fmt(row.amount)} USD`, amount: -row.amount, currency: 'USD' as const, status: row.status === 'pending' ? '待结算' : row.status === 'won' ? '已结算 · 判赢' : '已结算 · 判输', createdAt: row.createdAt, profit: row.profit })),
+    ...timeContractBills.map(row => ({ id: row.id, category: 'time' as const, title: `${row.projectSymbol} · ${row.direction === 'up' ? '概率上升' : '概率下降'}`, description: `${row.durationSeconds} 秒 · 投入 ${fmt(row.stake)} PTS`, amount: -row.stake, currency: 'PTS' as const, status: row.status === 'pending' ? '进行中' : row.status === 'won' ? '已结算 · 判赢' : row.status === 'draw' ? '已结算 · 平局退款' : '已结算 · 判输', createdAt: row.createdAt, profit: row.profit })),
+    ...forecastBills.map(row => ({ id: row.id, category: 'forecast' as const, title: `事件预测 · ${row.choice}`, description: `${row.eventId} · 判断概率 ${row.probability}% · 投入 ${fmt(row.stake)} PTS`, amount: -row.stake, currency: 'PTS' as const, status: row.status === 'pending' ? '待结算' : row.status === 'won' ? '已结算 · 判赢' : '已结算 · 判输', createdAt: row.updatedAt, profit: row.profit })),
+  ].sort((a, b) => b.createdAt.localeCompare(a.createdAt)), [walletTransactions, etfOrders, timeContractBills, forecastBills])
+  const visibleLedgerItems = ledgerCategory === 'all' ? ledgerItems : ledgerItems.filter(item => item.category === ledgerCategory)
   const chartRange = selected.last * 0.035
   const chartTop = selected.last + chartRange
   const chartStep = (chartRange * 2) / 3
@@ -387,7 +423,7 @@ export default function App() {
           <div className="account-content-grid"><section className="account-panel"><div className="account-panel-heading"><div><b>账户信息</b><small>身份与安全状态</small></div></div><div className="account-info-row"><span>注册邮箱</span><b>{registeredEmail||'尚未注册'}</b></div><div className="account-info-row"><span>个人 ID</span><b className="account-id-value">{personalId||'注册后生成'}{personalId&&<button aria-label="复制个人 ID" onClick={async()=>{try{await navigator.clipboard.writeText(personalId);notify('个人 ID 已复制')}catch{notify(`个人 ID：${personalId}`)}}}><Copy size={13}/></button>}</b></div><div className="account-info-row"><span>KYC 认证</span><button className="account-inline-action" onClick={openKyc}>{kycStatusLabel} · 管理认证 <ArrowUpRight size={12}/></button></div><div className="account-info-row"><span>账户类型</span><b>本地演示账户</b></div></section>
           <section className="account-panel"><div className="account-panel-heading"><div><b>快捷操作</b><small>资金操作均绑定此个人 ID</small></div></div><div className="account-action-grid"><button onClick={openDeposit}><Coins size={16}/>充值 USDT</button><button onClick={openWithdrawal}><ArrowUpRight size={16}/>提现 USDT</button><button onClick={openKyc}><Fingerprint size={16}/>身份认证</button><button onClick={()=>setWorkspaceView('prediction')}><Activity size={16}/>我的预测</button></div><p className="account-demo-note"><TriangleAlert size={13}/> 余额和订单为模拟数据，不具备现金价值；不发生链上转账。</p></section></div>
           <section className="account-panel account-invite-panel"><div className="account-panel-heading"><div><b>邀请好友</b><small>分享专属链接，新用户注册时会记录你的个人 ID</small></div><span className="account-invite-count">已邀请 {inviteCount} 人</span></div>{personalInviteLink?<><div className="account-invite-link"><span>{personalInviteLink}</span><button onClick={async()=>{try{await navigator.clipboard.writeText(personalInviteLink);notify('邀请链接已复制')}catch{notify('复制失败，请检查浏览器剪贴板权限')}}}><Copy size={14}/>复制链接</button></div><p className="account-invite-note"><ShieldCheck size={13}/> 邀请关系仅用于本平台演示记录；当前不会产生返佣或真实收益。</p></>:<div className="account-empty">注册账户后生成专属邀请链接</div>}</section>
-          <section className="account-panel account-history-panel"><div className="account-panel-heading"><div><b>最近资金记录</b><small>充值和提现记录关联个人 ID</small></div><button className="account-text-action" onClick={openDeposit}>查看资金管理 <ArrowUpRight size={13}/></button></div>{walletTransactions.length===0?<div className="account-empty">暂无资金记录</div>:walletTransactions.slice(0,5).map(row=><div className="account-history-row" key={row.id}><div><b className={row.type==='deposit'?'':'negative'}>{row.type==='deposit'?'+':'−'}{fmt(row.amount)} USDT</b><small>{row.type==='deposit'?'充值':'提现'} · {row.network} · {new Date(row.createdAt).toLocaleString('zh-CN')}</small></div><span>{row.status==='completed'?'已完成':row.status==='pending'?'审核中':'已驳回'}</span></div>)}</section>
+          <section className="account-panel account-history-panel"><div className="account-panel-heading"><div><b>历史账单</b><small>充值、提现及各类模拟交易记录 · 按时间倒序</small></div><button className="account-text-action" onClick={()=>void refreshLedger()} disabled={ledgerBusy}>{ledgerBusy?'刷新中…':'刷新记录'} <ArrowUpRight size={13}/></button></div><div className="ledger-tabs">{([['all','全部'],['deposit','充值'],['withdrawal','提现'],['etf','合约 ETF'],['time','时间合约'],['forecast','预测']] as [LedgerCategory,string][]).map(([key,label])=><button key={key} className={ledgerCategory===key?'active-ledger-tab':''} onClick={()=>setLedgerCategory(key)}>{label}</button>)}</div>{visibleLedgerItems.length===0?<div className="account-empty">{personalId?'当前分类暂无账单记录':'注册并登录后查看个人账单'}</div>:<div className="ledger-list">{visibleLedgerItems.map(row=><article className="ledger-row" key={`${row.category}-${row.id}`}><div className="ledger-icon"><span>{row.category==='deposit'?'充':row.category==='withdrawal'?'提':row.category==='etf'?'ETF':row.category==='time'?'时':'测'}</span></div><div className="ledger-row-main"><b>{row.title}</b><small>{row.description}</small><time>{new Date(row.createdAt).toLocaleString('zh-CN')}</time></div><div className="ledger-row-values"><b className={row.amount>0?'positive':row.amount<0?'negative':''}>{row.amount>0?'+':''}{fmt(row.amount)} <small>{row.currency}</small></b>{row.profit!==null&&row.profit!==undefined&&<span className={row.profit>=0?'positive':'negative'}>盈亏 {row.profit>0?'+':''}{fmt(row.profit)} {row.currency==='USD'?'USD':'PTS'}</span>}<em className={row.status.includes('审核')||row.status.includes('进行')||row.status.includes('待结算')?'pending':row.status.includes('驳回')||row.status.includes('判输')?'failed':'settled'}>{row.status}</em></div></article>)}</div>}</section>
         </section>}
         {workspaceView==='market'&&frontConfig.showMarketOverview&&<>
         <section className="market-strip"><div className="market-intro"><span className="market-kicker">{frontConfig.uiText.temperatureTitle}</span><b>{frontConfig.indexTitle}</b><small>{frontConfig.indexSubtitle}</small></div>{frontConfig.marketIndices.map(item=><div className="index-stat" key={item.s}><span>{item.s}</span><b>{item.v}</b><small className={item.down?'negative':'positive'}>{item.c}</small></div>)}<div className="strip-decoration"><Activity size={21}/></div></section>

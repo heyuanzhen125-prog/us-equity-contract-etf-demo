@@ -490,9 +490,19 @@ function validProjectInput({ symbol, name, startPrice, targetChangePct }) {
     && Number.isFinite(Number(targetChangePct)) && Math.abs(Number(targetChangePct)) <= 20
 }
 
+function publicForecastEvents() {
+  return forecastEvents.map(event => {
+    const submissions = [...forecasts.values()].filter(item => item.eventId === event.id)
+    const communityConsensus = submissions.length
+      ? Math.round(submissions.reduce((sum, item) => sum + item.probability, 0) / submissions.length)
+      : null
+    return { ...event, communityConsensus, predictionCount: submissions.length }
+  })
+}
+
 app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'northstar-local-api' }))
-app.get('/api/public-config', (_req, res) => res.json({ config: frontendConfig, forecastEvents }))
-app.get('/api/forecast-events', (_req, res) => res.json({ events: forecastEvents }))
+app.get('/api/public-config', (_req, res) => res.json({ config: frontendConfig, forecastEvents: publicForecastEvents() }))
+app.get('/api/forecast-events', (_req, res) => res.json({ events: publicForecastEvents() }))
 app.get('/api/admin/front-config', requirePermission('front-config'), (_req, res) => res.json({ config: frontendConfig, forecastEvents }))
 app.patch('/api/admin/front-config', requirePermission('front-config'), (req, res) => {
   const input = req.body || {}

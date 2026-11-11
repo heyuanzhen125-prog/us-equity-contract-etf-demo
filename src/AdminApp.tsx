@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Activity, ArrowLeft, BadgeCheck, CalendarDays, ChevronRight, CircleAlert, Coins, Fingerprint, KeyRound, LogOut, RefreshCw, Search, Settings2, ShieldCheck, UserRound, Users, X, ChartNoAxesCombined } from 'lucide-react'
 import AdminAccessView from './AdminAccessView'
 import AdminAgentsView from './AdminAgentsView'
+import { FRONTEND_LINK_HREF } from './siteRouting'
 import AdminDepositSettingsApp from './AdminDepositSettingsApp'
 import AdminFrontSettingsView from './AdminFrontSettingsView'
 import AdminProjectsView from './AdminProjectsView'
@@ -51,7 +52,7 @@ export default function AdminApp() {
   const [rejectReason, setRejectReason] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const [adminView, setAdminView] = useState<AdminView>(() => window.location.pathname === '/admin/deposits' ? 'deposits' : 'kyc')
+  const [adminView, setAdminView] = useState<AdminView>(() => ['/admin/deposits', '/deposits'].includes(window.location.pathname) ? 'deposits' : 'kyc')
   const selected = rows.find(row => row.id === selectedId) || rows[0]
   const canAccess = (view: AdminView) => Boolean(role?.permissions.includes(view))
   const accessibleViews = allViews.filter(canAccess)
@@ -203,7 +204,7 @@ export default function AdminApp() {
       <button className="admin-primary" disabled={busy}>{busy ? '正在验证…' : '登录后台'}</button>
       {error && <div className="admin-error"><CircleAlert size={14}/>{error}</div>}
       <div className="admin-login-note"><ShieldCheck size={13}/> 本地超级管理员主密钥默认值：<code>local-demo-admin</code></div>
-      <a href="/" className="admin-back"><ArrowLeft size={13}/>返回前台</a>
+      <a href={FRONTEND_LINK_HREF} className="admin-back"><ArrowLeft size={13}/>返回前台</a>
     </form>
   </main>
 

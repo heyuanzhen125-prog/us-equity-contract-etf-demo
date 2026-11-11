@@ -185,7 +185,7 @@ app.patch('/api/admin/change-password', requireAdmin, (req, res) => {
   res.json({ ok: true })
 })
 
-app.get('/api/admin/permissions', requirePermission('permissions'), (_req, res) => {
+app.get('/api/admin/permissions', requireRootAdmin, (_req, res) => {
   res.json({
     modules: permissionModules,
     roles: [...permissionRoles.values()],
@@ -193,7 +193,7 @@ app.get('/api/admin/permissions', requirePermission('permissions'), (_req, res) 
   })
 })
 
-app.put('/api/admin/permissions', requirePermission('permissions'), (req, res) => {
+app.put('/api/admin/permissions', requireRootAdmin, (req, res) => {
   const roles = req.body?.roles
   if (!Array.isArray(roles) || roles.length > 30) return res.status(400).json({ error: '角色列表无效（最多 30 个）' })
   const normalized = []
@@ -215,7 +215,7 @@ app.put('/api/admin/permissions', requirePermission('permissions'), (req, res) =
   res.json({ roles: [...permissionRoles.values()] })
 })
 
-app.post('/api/admin/staff-users', requirePermission('permissions'), (req, res) => {
+app.post('/api/admin/staff-users', requireRootAdmin, (req, res) => {
   const { username, password, roleId } = req.body || {}
   const normalizedUsername = typeof username === 'string' ? username.trim() : ''
   if (!/^[a-zA-Z0-9._-]{3,32}$/.test(normalizedUsername)) return res.status(400).json({ error: '账号需为 3–32 位字母、数字、点、下划线或连字符' })
@@ -228,7 +228,7 @@ app.post('/api/admin/staff-users', requirePermission('permissions'), (req, res) 
   res.status(201).json({ user: safeStaffUser(user) })
 })
 
-app.patch('/api/admin/staff-users/:id', requirePermission('permissions'), (req, res) => {
+app.patch('/api/admin/staff-users/:id', requireRootAdmin, (req, res) => {
   const user = staffUsers.get(req.params.id)
   if (!user) return res.status(404).json({ error: '未找到后台账号' })
   const { roleId, active, password } = req.body || {}
@@ -277,6 +277,14 @@ function requireAdmin(req, res, next) {
     req.admin = { roleId: 'superadmin', root: true, token: suppliedText, mustChangePassword: false }
   }
   next()
+}
+
+function requireRootAdmin(req, res, next) {
+  requireAdmin(req, res, error => {
+    if (error) return next(error)
+    if (!req.admin.root) return res.status(403).json({ error: '只有超级管理员可以管理角色和后台账号' })
+    next()
+  })
 }
 
 function requirePermission(permission) {

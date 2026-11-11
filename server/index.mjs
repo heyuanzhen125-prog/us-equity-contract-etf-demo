@@ -611,7 +611,8 @@ async function syncExchangeEvents() {
 app.get('/api/exchange-events', async (_req, res) => res.json(await syncExchangeEvents()))
 async function syncMarketQuotes() {
   const apiKey = process.env.MASSIVE_API_KEY?.trim()
-  if (!apiKey) return { provider: 'SIM', configured: false, connected: false, message: 'Massive 行情 API Key 尚未配置；当前为演示价格。', updatedAt: null, quotes: {} }
+  const publicDisplayLicensed = process.env.MASSIVE_PUBLIC_DISPLAY_LICENSED === 'true'
+  if (!apiKey || !publicDisplayLicensed) return { provider: 'SIM', configured: Boolean(apiKey), connected: false, message: !apiKey ? 'Massive 行情 API Key 尚未配置；当前为演示价格。' : '已配置行情 API Key，但公网展示授权未启用；当前为演示价格。', updatedAt: null, quotes: {} }
   if (marketQuotesCache.payload && marketQuotesCache.expiresAt > Date.now()) return marketQuotesCache.payload
   const symbols = frontendConfig.marketAssets.map(asset => asset.symbol).filter(Boolean)
   const url = new URL('https://api.massive.com/v2/snapshot/locale/us/markets/stocks/tickers')

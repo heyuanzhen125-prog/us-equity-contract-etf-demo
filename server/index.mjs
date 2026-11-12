@@ -2134,6 +2134,10 @@ app.patch('/api/admin/kyc-submissions/:id', requirePermission('kyc'), async (req
   res.json({ submission: safeSubmission(item) })
 })
 
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: 'API 路径或请求方式不存在，请刷新页面后重试' })
+})
+
 app.use((error, req, res, next) => {
   if (res.headersSent) return next(error)
   const status = Number.isInteger(error?.status) && error.status >= 400 && error.status < 600 ? error.status : 500

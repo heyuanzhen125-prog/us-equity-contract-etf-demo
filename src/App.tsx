@@ -8,10 +8,10 @@ import './etf-orders.css'
 
 type Asset = { symbol: string; name: string; last: number; change: number; volume: string; type: string; color: string; spark: number[]; quoteSource?: string }
 type MarketDataMeta = { provider: string; configured: boolean; connected: boolean; message: string; updatedAt: string | null }
-type DemoProject = { id: string; symbol: string; name: string; startPrice: number; lastPrice: number; targetChangePct: number; curve: number[]; simulated: true; sourceExchange?: string; sourceUrl?: string; sourceExpiry?: string; sourceTicker?: string }
+type DemoProject = { id: string; symbol: string; name: string; startPrice: number; lastPrice: number; targetChangePct: number; curve: number[]; simulated: true; tradable?: boolean; referenceType?: string; sourceExchange?: string; sourceUrl?: string; sourceExpiry?: string; sourceTicker?: string }
 type EtfOrder = { id: string; symbol: string; name: string; side: 'buy' | 'sell'; quantity: number; price: number; amount: number; leverage?: number; exposureAmount?: number; status: 'pending' | 'won' | 'lost'; result: 'won' | 'lost' | null; payout: number | null; profit: number | null; createdAt: string }
 type WalletTransaction = { id: string; personalId: string; type: 'deposit' | 'withdrawal'; amount: number; fee: number; network: string; addressMasked: string; status: 'completed' | 'pending' | 'rejected'; reason: string; createdAt: string; reviewedAt: string | null }
-type TimeContractBill = { id: string; projectSymbol: string; direction: 'up' | 'down'; durationSeconds: number; stake: number; payoutPercent: number; status: 'pending' | 'won' | 'lost' | 'draw'; profit: number | null; createdAt: string; settledAt: string | null }
+type TimeContractBill = { id: string; projectSymbol: string; direction: 'up' | 'down'; durationSeconds: number; stake: number; payoutPercent: number; status: 'pending' | 'won' | 'lost' | 'draw'; profit: number | null; createdAt: string; expiresAt?: string; settlementSource?: string; settledAt: string | null }
 type ForecastBill = { id: string; eventId: string; choice: 'YES' | 'NO'; probability: number; stake: number; rewardPercent: number; status: 'pending' | 'won' | 'lost'; profit: number | null; updatedAt: string; settledAt: string | null }
 type LedgerCategory = 'all' | 'deposit' | 'withdrawal' | 'etf' | 'time' | 'forecast'
 type LedgerBill = { id: string; category: Exclude<LedgerCategory, 'all'>; title: string; description: string; amount: number; currency: 'USDT' | 'USD' | 'PTS'; status: string; createdAt: string; profit?: number | null }

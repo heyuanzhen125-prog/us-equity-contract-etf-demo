@@ -61,6 +61,7 @@
 .admin-orders-list{max-height:620px;overflow:auto}
 .settlement-rationale-field{display:grid;gap:6px;margin:12px 14px;padding:10px;border:1px solid #303744;border-radius:6px;color:#9da6b4;font-size:9px}
 .settlement-rationale-field textarea{width:100%;min-height:54px;padding:8px;border:1px solid #303744;border-radius:5px;background:#0d1219;color:#d9dfea;font:inherit;resize:vertical}
+.settlement-auto-note{padding:7px 9px;border:1px solid #344735;border-radius:5px;background:#18251b;color:#95c7a0;font-size:8px;line-height:1.4}
 .admin-order-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border-bottom:1px solid #222832}
 .admin-order-row:last-child{border-bottom:0}
 .admin-order-summary{min-width:0;display:grid;gap:7px}

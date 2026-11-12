@@ -13,6 +13,12 @@ type Order = {
   symbol: string
   direction?: string
   durationSeconds?: number
+  expiresAt?: string
+  entryPrice?: number
+  exitPrice?: number | null
+  settlementModel?: string
+  settlementSource?: string
+  settlementEvidence?: { curveHash?: string; evaluatedAt?: string } | null
   quantity?: number
   leverage?: number
   exposureAmount?: number
@@ -30,6 +36,7 @@ type ControlsSnapshot = {
   pendingForecasts: number
   pendingEtfOrders: number
   manualOutcomePoliciesEnabled?: boolean
+  automaticTimeSettlementEnabled?: boolean
 }
 type ControlDraft = { scope: 'all' | 'user'; personalId: string }
 
@@ -54,6 +61,7 @@ export default function AdminPredictionPreviewView({ adminKey }: { adminKey: str
     pendingForecasts: 0,
     pendingEtfOrders: 0,
     manualOutcomePoliciesEnabled: import.meta.env.DEV,
+    automaticTimeSettlementEnabled: false,
   })
   const [orders, setOrders] = useState<Order[]>([])
   const [orderFilter, setOrderFilter] = useState<'all' | 'pending' | Kind>('all')
@@ -235,11 +243,14 @@ export default function AdminPredictionPreviewView({ adminKey }: { adminKey: str
               <span>{order.kind === 'contracts' ? `${order.direction === 'up' ? '看涨' : '看跌'} · ${order.durationSeconds} 秒` : order.kind === 'etfOrders' ? `${order.direction === 'buy' ? '买入' : '卖出'} · ${order.quantity} 股 · ${order.leverage || 1}×` : `概率 ${order.probability}%`}</span>
               <span>{order.kind === 'etfOrders' ? `保证金 ${formatAmount(order.stake)} USD · 名义金额 ${formatAmount(order.exposureAmount || order.stake)} USD` : `投入 ${formatAmount(order.stake)} PTS`}</span>
               <span>{new Date(order.createdAt).toLocaleString('zh-CN')}</span>
+              {order.kind === 'contracts' && order.expiresAt && <span>到期 {new Date(order.expiresAt).toLocaleString('zh-CN')} · {order.settlementSource || 'SIM'} 快照结算{order.exitPrice !== null && order.exitPrice !== undefined ? ` · ${order.entryPrice?.toFixed(4)} → ${order.exitPrice.toFixed(4)}` : ''}</span>}
+              {order.settlementEvidence?.curveHash && <span>曲线快照 {order.settlementEvidence.curveHash.slice(0, 16)}…</span>}
               {order.profit !== null && <span>盈亏 {order.profit > 0 ? '+' : ''}{formatAmount(order.profit)} {order.kind === 'etfOrders' ? 'USD' : 'PTS'}</span>}
             </div>
           </div>
           <div className="admin-order-actions">
-            {order.status === 'pending' && <><button className="outcome-win" onClick={() => void setOrderResult(order, 'won')} disabled={busy || settlementRationale.trim().length < 10}>复核为赢</button>
+            {order.status === 'pending' && order.kind === 'contracts' && snapshot.automaticTimeSettlementEnabled && <small className="settlement-auto-note">到期自动按冻结的 SIM 曲线快照结算</small>}
+            {order.status === 'pending' && !(order.kind === 'contracts' && snapshot.automaticTimeSettlementEnabled) && <><button className="outcome-win" onClick={() => void setOrderResult(order, 'won')} disabled={busy || settlementRationale.trim().length < 10}>复核为赢</button>
             <button className="outcome-loss" onClick={() => void setOrderResult(order, 'lost')} disabled={busy || settlementRationale.trim().length < 10}>复核为输</button></>}
           </div>
         </article>)}

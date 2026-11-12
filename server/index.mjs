@@ -55,9 +55,17 @@ async function platformDatabaseRequest(table, query = '', { method = 'GET', body
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   })
-  if (!response.ok) throw new Error(`订单数据库请求失败（${response.status}）`)
+  const text = response.status === 204 ? '' : await response.text()
+  if (!response.ok) {
+    let detail = {}
+    try { detail = JSON.parse(text) } catch {}
+    const error = new Error(`订单数据库请求失败（${response.status}）`)
+    error.status = response.status
+    error.code = detail.code || ''
+    error.databaseMessage = detail.message || ''
+    throw error
+  }
   if (response.status === 204) return null
-  const text = await response.text()
   return text ? JSON.parse(text) : null
 }
 
@@ -226,6 +234,26 @@ async function persistOrderOrRespond(res, kind, item) {
   }
 }
 
+async function reserveDemoOrderOrRespond(res, kind, item, amount) {
+  if (!platformDatabaseConfig()) {
+    if (!(await persistOrderOrRespond(res, kind, item))) return null
+    return { balance: null }
+  }
+  try {
+    return await platformDatabaseRpc('place_platform_demo_order', {
+      p_order_id: item.id, p_kind: kind, p_order_data: item, p_amount: amount,
+    })
+  } catch (error) {
+    if (error.databaseMessage === 'INSUFFICIENT_DEMO_BALANCE') {
+      res.status(400).json({ error: kind === 'etfOrders' ? '虚拟美元余额不足' : '虚拟积分余额不足' })
+      return null
+    }
+    console.error('Unable to atomically reserve simulated order funds', error)
+    res.status(error.status === 409 ? 409 : 503).json({ error: '模拟订单未能安全写入余额账本，请刷新后重试' })
+    return null
+  }
+}
+
 async function loadPlatformOrders(personalId = '') {
   if (!platformDatabaseConfig()) return null
   const filter = personalId ? `&personal_id=eq.${encodeURIComponent(personalId)}` : ''
@@ -253,11 +281,19 @@ function balanceFromPlatformOrders(stored, kinds, initialBalance, fallbackBalanc
 }
 
 async function loadVirtualPointsBalance(personalId, stored = undefined) {
+  if (platformDatabaseConfig()) {
+    const rows = await platformDatabaseRequest('platform_demo_accounts', `?select=balance&personal_id=eq.${encodeURIComponent(personalId)}&currency=eq.PTS&limit=1`)
+    return rows?.[0] ? rounded(Number(rows[0].balance)) : 10000
+  }
   const rows = stored === undefined ? await loadPlatformOrders(personalId) : stored
   return balanceFromPlatformOrders(rows, ['contracts', 'forecasts'], 10000, virtualBalances.get(personalId))
 }
 
 async function loadEtfDemoBalance(personalId, stored = undefined) {
+  if (platformDatabaseConfig()) {
+    const rows = await platformDatabaseRequest('platform_demo_accounts', `?select=balance&personal_id=eq.${encodeURIComponent(personalId)}&currency=eq.USD&limit=1`)
+    return rows?.[0] ? rounded(Number(rows[0].balance)) : 25000
+  }
   const rows = stored === undefined ? await loadPlatformOrders(personalId) : stored
   return balanceFromPlatformOrders(rows, ['etfOrders'], 25000, etfBalances.get(personalId))
 }
@@ -908,7 +944,7 @@ function publicProject(project) {
   if (project.sourceExchange) return {
     id: project.id, symbol: project.symbol, name: project.name, startPrice: project.startPrice,
     lastPrice: project.lastPrice, targetChangePct: rounded((project.lastPrice / project.startPrice - 1) * 100),
-    curve: project.marketCurve, simulated: true, visible: true, sortOrder: project.sortOrder,
+    curve: project.marketCurve, simulated: true, tradable: false, referenceType: 'probability', visible: true, sortOrder: project.sortOrder,
     updatedAt: project.updatedAt, sourceExchange: project.sourceExchange, sourceUrl: project.sourceUrl,
     sourceExpiry: project.sourceExpiry, sourceTicker: project.sourceTicker,
   }
@@ -922,7 +958,17 @@ function publicProject(project) {
   const curve = marketPoints.map((point, index) => index <= currentIndex ? point : lastPrice)
   if (currentIndex < marketPoints.length - 1) curve[currentIndex + 1] = lastPrice
   else curve[currentIndex] = lastPrice
-  return { id: project.id, symbol: project.symbol, name: project.name, startPrice: project.startPrice, lastPrice, targetChangePct: rounded((lastPrice / project.startPrice - 1) * 100), curve, simulated: true, visible: project.visible, sortOrder: project.sortOrder, updatedAt: project.updatedAt }
+  return { id: project.id, symbol: project.symbol, name: project.name, startPrice: project.startPrice, lastPrice, targetChangePct: rounded((lastPrice / project.startPrice - 1) * 100), curve, simulated: true, tradable: true, referenceType: 'simulated_price', visible: project.visible, sortOrder: project.sortOrder, updatedAt: project.updatedAt }
+}
+
+function simCurvePriceAt(curve, startedAt, intervalSeconds, timestamp) {
+  if (!Array.isArray(curve) || !curve.length) return 0
+  const intervalMs = Math.max(1, Number(intervalSeconds) || 1) * 1000
+  const elapsedSteps = Math.max(0, (timestamp - startedAt) / intervalMs)
+  const currentIndex = Math.min(Math.floor(elapsedSteps), curve.length - 1)
+  const nextIndex = Math.min(currentIndex + 1, curve.length - 1)
+  const progress = currentIndex === nextIndex ? 0 : elapsedSteps - currentIndex
+  return rounded(Number(curve[currentIndex]) + (Number(curve[nextIndex]) - Number(curve[currentIndex])) * progress)
 }
 
 function adminProject(project) {
@@ -935,7 +981,10 @@ function publicPrediction(item) {
     durationSeconds: item.durationSeconds, stake: item.stake, payoutPercent: item.payoutPercent, status: item.status,
     result: item.status === 'pending' ? null : item.result, entryPrice: item.entryPrice,
     exitPrice: item.status === 'pending' ? null : item.exitPrice, payout: item.status === 'pending' ? null : item.payout,
-    profit: item.status === 'pending' ? null : item.profit, createdAt: item.createdAt, settledAt: item.settledAt,
+    profit: item.status === 'pending' ? null : item.profit, createdAt: item.createdAt,
+    expiresAt: item.expiresAt || (Number.isFinite(Date.parse(item.createdAt)) && Number.isFinite(Number(item.durationSeconds)) ? new Date(Date.parse(item.createdAt) + Number(item.durationSeconds) * 1000).toISOString() : null),
+    settlementModel: item.settlementModel || 'legacy_demo', settlementSource: item.settlementSource || 'SIM',
+    settledAt: item.settledAt,
   }
 }
 
@@ -950,6 +999,62 @@ function settleContract(item, result, { persist = true } = {}) {
   item.settledAt = new Date().toISOString()
   virtualBalances.set(item.personalId, rounded((virtualBalances.get(item.personalId) ?? 10000) + payout - previousPayout))
   if (persist) void savePlatformOrder('contracts', item).catch(error => console.error('Unable to persist settled time contract', error))
+}
+
+async function settleTimeContractFromSnapshot(item) {
+  if (!item || item.status !== 'pending') return false
+  const expiresAt = item.expiresAt || (Number.isFinite(Date.parse(item.createdAt)) && Number.isFinite(Number(item.durationSeconds)) ? new Date(Date.parse(item.createdAt) + Number(item.durationSeconds) * 1000).toISOString() : '')
+  if (!expiresAt || Date.parse(expiresAt) > Date.now()) return false
+  const snapshot = item.settlementSnapshot
+  const legacySnapshot = !snapshot && Number.isFinite(Number(item.targetPrice)) && Number(item.targetPrice) > 0
+  if (!legacySnapshot && (!snapshot || snapshot.model !== 'sim_curve_v1' || !Array.isArray(snapshot.curve) || !snapshot.curveHash)) return false
+  const settlementAt = Date.parse(expiresAt)
+  const exitPrice = legacySnapshot ? Number(item.targetPrice) : simCurvePriceAt(snapshot.curve, snapshot.startedAt, snapshot.intervalSeconds, settlementAt)
+  if (!Number.isFinite(exitPrice) || exitPrice <= 0) return false
+  const delta = exitPrice - item.entryPrice
+  const tieTolerancePct = snapshot?.tieTolerancePct || 0.01
+  const tolerance = item.entryPrice * (tieTolerancePct / 100)
+  const calculatedResult = Math.abs(delta) <= tolerance ? 'draw' : ((delta > 0) === (item.direction === 'up') ? 'won' : 'lost')
+  const localOverride = !platformDatabaseConfig() && !process.env.VERCEL ? item.forcedResult : null
+  const result = localOverride || calculatedResult
+  const settled = structuredClone(item)
+  settled.targetPrice = exitPrice
+  settled.exitPrice = exitPrice
+  settled.status = result
+  settled.result = result
+  settled.payout = result === 'won'
+    ? rounded(settled.stake * (1 + settled.payoutPercent / 100))
+    : result === 'draw' ? settled.stake : 0
+  settled.profit = rounded(settled.payout - settled.stake)
+  settled.settledAt = new Date().toISOString()
+  settled.settlementEvidence = {
+    source: 'SIM', model: snapshot?.model || 'legacy_fixed_demo_price', curveHash: snapshot?.curveHash || createHash('sha256').update(`${item.projectId}:${item.createdAt}:${item.entryPrice}:${exitPrice}`).digest('hex'), localDemoOverride: Boolean(localOverride),
+    entryPrice: item.entryPrice, exitPrice, effectiveAt: expiresAt,
+    evaluatedAt: settled.settledAt, tieTolerancePct,
+  }
+
+  if (platformDatabaseConfig()) {
+    try {
+      await platformDatabaseRpc('settle_platform_order_with_audit', {
+        p_order_id: settled.id, p_kind: 'contracts', p_order_data: settled,
+        p_actor: 'system:sim-curve-settlement',
+        p_rationale: `系统按到期时点与保存的 SIM 价格快照自动结算（快照哈希 ${settled.settlementEvidence.curveHash.slice(0, 16)}）。`,
+      })
+    } catch (error) {
+      console.error('Unable to persist due simulated time contract settlement', error)
+      return false
+    }
+  } else {
+    virtualBalances.set(settled.personalId, rounded((virtualBalances.get(settled.personalId) ?? 10000) + settled.payout))
+    await savePlatformOrder('contracts', settled).catch(error => console.error('Unable to persist simulated time contract settlement', error))
+  }
+  predictions.set(settled.id, settled)
+  return true
+}
+
+async function settleDueTimeContracts(rows) {
+  const due = (rows || []).filter(row => row.kind === 'contracts' && row.item?.status === 'pending' && Date.parse(row.item.expiresAt || (Number.isFinite(Date.parse(row.item.createdAt)) ? new Date(Date.parse(row.item.createdAt) + Number(row.item.durationSeconds || 0) * 1000).toISOString() : '')) <= Date.now())
+  await Promise.all(due.map(row => settleTimeContractFromSnapshot(row.item)))
 }
 
 function timePayoutPercent(direction, projectId) {
@@ -968,6 +1073,7 @@ function timePayoutPercent(direction, projectId) {
 }
 
 function getOutcomePolicy(kind, personalId) {
+  if (process.env.VERCEL || platformDatabaseConfig()) return null
   return outcomePolicies[kind].users.get(personalId) || outcomePolicies[kind].all
 }
 
@@ -1361,6 +1467,7 @@ app.get('/api/admin/outcome-controls', requirePermission('prediction-preview'), 
   const serialize = policy => ({ all: policy.all, users: Object.fromEntries(policy.users) })
   res.json({
     manualOutcomePoliciesEnabled: !process.env.VERCEL,
+    automaticTimeSettlementEnabled: Boolean(process.env.VERCEL || platformDatabaseConfig()),
     policies: { contracts: serialize(outcomePolicies.contracts), forecasts: serialize(outcomePolicies.forecasts), etfOrders: serialize(outcomePolicies.etfOrders) },
     pendingContracts: [...predictions.values()].filter(item => item.status === 'pending').length,
     pendingForecasts: [...forecasts.values()].filter(item => item.status === 'pending').length,
@@ -1424,7 +1531,9 @@ app.get('/api/admin/orders', requirePermission('prediction-preview'), async (_re
     id: item.id, kind: 'contracts', personalId: item.personalId, symbol: item.projectSymbol,
     direction: item.direction, durationSeconds: item.durationSeconds, stake: item.stake,
     payoutPercent: item.payoutPercent, status: item.status, result: item.result,
-    profit: item.profit, createdAt: item.createdAt,
+    profit: item.profit, createdAt: item.createdAt, expiresAt: item.expiresAt,
+    entryPrice: item.entryPrice, exitPrice: item.exitPrice, settlementModel: item.settlementModel,
+    settlementSource: item.settlementSource, settlementEvidence: item.settlementEvidence,
   }))
   const forecastOrders = [...forecasts.values()].map(item => {
     const event = forecastEvents.find(candidate => candidate.id === item.eventId)
@@ -1439,12 +1548,18 @@ app.get('/api/admin/orders', requirePermission('prediction-preview'), async (_re
     direction: item.side, quantity: item.quantity, leverage: item.leverage || 1, exposureAmount: item.exposureAmount || item.amount, stake: item.amount, payoutPercent: item.payoutPercent,
     status: item.status, result: item.result, profit: item.profit, createdAt: item.createdAt,
   }))
-  const stored = await loadPlatformOrders()
+  let stored = await loadPlatformOrders()
+  if (stored) {
+    await settleDueTimeContracts(stored)
+    stored = await loadPlatformOrders()
+  }
   const storedOrders = (stored || []).map(({ kind, item }) => kind === 'contracts' ? ({
     id: item.id, kind, personalId: item.personalId, symbol: item.projectSymbol,
     direction: item.direction, durationSeconds: item.durationSeconds, stake: item.stake,
     payoutPercent: item.payoutPercent, status: item.status, result: item.result,
-    profit: item.profit, createdAt: item.createdAt,
+    profit: item.profit, createdAt: item.createdAt, expiresAt: item.expiresAt,
+    entryPrice: item.entryPrice, exitPrice: item.exitPrice, settlementModel: item.settlementModel,
+    settlementSource: item.settlementSource, settlementEvidence: item.settlementEvidence,
   }) : kind === 'forecasts' ? ({
     id: item.id, kind, personalId: item.personalId,
     symbol: forecastEvents.find(event => event.id === item.eventId)?.question || item.eventId,
@@ -1467,6 +1582,7 @@ async function applyAdminOrderResult(kind, id, result, res, { actor = 'superadmi
   if (!['contracts', 'forecasts', 'etfOrders'].includes(kind)) return res.status(404).json({ error: '订单类型无效' })
   if (!['won', 'lost'].includes(result)) return res.status(400).json({ error: '订单结果必须为赢或输' })
   if (typeof id !== 'string' || !id || id.length > 100) return res.status(400).json({ error: '订单 ID 无效' })
+  if ((process.env.VERCEL || platformDatabaseConfig()) && kind === 'contracts') return res.status(403).json({ error: '已连接数据库的时间合约按到期时点和订单冻结的 SIM 价格快照自动结算，后台不可手动改写结果' })
   if (typeof rationale !== 'string' || rationale.trim().length < 10 || rationale.length > 500) return res.status(400).json({ error: '结算依据须为 10–500 个字符' })
 
   let order
@@ -1833,7 +1949,11 @@ app.get('/api/time-contracts', requireMember, async (req, res) => {
   if (!frontendConfig.showTimeContracts) return res.status(403).json({ error: '后台已关闭时间合约模块' })
   const personalId = req.member.personalId
   if (!validPersonalId(personalId)) return res.status(400).json({ error: '请先注册并绑定个人 ID' })
-  const stored = await loadPlatformOrders(personalId)
+  let stored = await loadPlatformOrders(personalId)
+  if (stored) {
+    await settleDueTimeContracts(stored)
+    stored = await loadPlatformOrders(personalId)
+  }
   const itemsById = new Map((stored || []).filter(row => row.kind === 'contracts').map(row => [row.item.id, row.item]))
   for (const item of predictions.values()) if (item.personalId === personalId) itemsById.set(item.id, item)
   const items = [...itemsById.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -1868,11 +1988,12 @@ app.post('/api/forecasts', requireMember, async (req, res) => {
   const value = choice ? (choice === 'YES' ? 75 : 25) : Number(probability)
   if (!Number.isInteger(value) || value < 1 || value > 99 || !Number.isInteger(stake) || stake < 10 || stake > 1000 || typeof rationale !== 'string' || rationale.length > 280) return res.status(400).json({ error: '概率范围为 1–99%，虚拟积分投入为 10–1000，说明最多 280 字' })
   const key = `${personalId}:${eventId}`
-  const existing = forecasts.get(key)
+  const storedOrders = platformDatabaseConfig() ? await loadPlatformOrders(personalId) : null
+  const existing = forecasts.get(key) || storedOrders?.find(row => row.kind === 'forecasts' && row.item.eventId === eventId)?.item
   if (existing && existing.status !== 'pending') return res.status(409).json({ error: '该预测已结算，不能修改或重复投入' })
   const balance = await loadVirtualPointsBalance(personalId)
   if (!existing && balance < stake) return res.status(400).json({ error: '虚拟积分余额不足' })
-  if (!existing) virtualBalances.set(personalId, rounded(balance - stake))
+  if (!existing && !platformDatabaseConfig()) virtualBalances.set(personalId, rounded(balance - stake))
   const item = {
     ...(existing || {}),
     id: existing?.id || randomUUID(),
@@ -1893,10 +2014,23 @@ app.post('/api/forecasts', requireMember, async (req, res) => {
   forecasts.set(key, item)
   const forcedResult = getOutcomePolicy('forecasts', personalId)
   if (forcedResult) settleForecast(item, forcedResult)
-  if (!(await persistOrderOrRespond(res, 'forecasts', item))) {
-    if (existing) forecasts.set(key, existing)
-    else { forecasts.delete(key); virtualBalances.set(personalId, balance) }
-    return
+  if (existing && platformDatabaseConfig()) {
+    try { await savePlatformOrder('forecasts', item) }
+    catch (error) {
+      forecasts.set(key, existing)
+      console.error('Unable to update simulated forecast', error)
+      return res.status(503).json({ error: '预测记录暂未保存，请稍后重试' })
+    }
+  } else {
+    const reserved = await reserveDemoOrderOrRespond(res, 'forecasts', item, item.stake)
+    if (!reserved) {
+      if (existing) forecasts.set(key, existing)
+      else {
+        forecasts.delete(key)
+        if (!platformDatabaseConfig()) virtualBalances.set(personalId, balance)
+      }
+      return
+    }
   }
   res.status(existing ? 200 : 201).json({ forecast: item, balance: await loadVirtualPointsBalance(personalId) })
 })
@@ -1930,7 +2064,7 @@ app.post('/api/etf-orders', requireMember, async (req, res) => {
   const amount = rounded(quantity * executionPrice)
   const balance = await loadEtfDemoBalance(personalId)
   if (balance < amount) return res.status(400).json({ error: '虚拟美元余额不足' })
-  etfBalances.set(personalId, rounded(balance - amount))
+  if (!platformDatabaseConfig()) etfBalances.set(personalId, rounded(balance - amount))
   const item = {
     id: randomUUID(), personalId, symbol: asset.symbol, name: asset.name, side, orderType, quantity,
     price: executionPrice, amount, leverage, exposureAmount: rounded(amount * leverage), payoutPercent: frontendConfig.contractPayoutPercent,
@@ -1940,9 +2074,10 @@ app.post('/api/etf-orders', requireMember, async (req, res) => {
   etfOrders.set(item.id, item)
   const forcedResult = getOutcomePolicy('etfOrders', personalId)
   if (forcedResult) settleEtfOrder(item, forcedResult)
-  if (!(await persistOrderOrRespond(res, 'etfOrders', item))) {
+  const reserved = await reserveDemoOrderOrRespond(res, 'etfOrders', item, amount)
+  if (!reserved) {
     etfOrders.delete(item.id)
-    etfBalances.set(personalId, balance)
+    if (!platformDatabaseConfig()) etfBalances.set(personalId, balance)
     return
   }
   res.status(201).json({ order: item, balance: await loadEtfDemoBalance(personalId) })
@@ -1959,6 +2094,7 @@ app.post('/api/time-contracts', requireMember, async (req, res) => {
     project = syncedTimeContractProjects.get(projectId)
   }
   if (!project) return res.status(404).json({ error: '请选择一个后台已发布的 SIM 演示项目' })
+  if (project.sourceExchange) return res.status(400).json({ error: '交易所同步数据是 YES/NO 概率参考，不是可用于方向结算的标的价格；请选择后台发布的 SIM 价格项目' })
   const duration = Number(durationSeconds)
   const amount = Number(stake)
   if (!['up', 'down'].includes(direction) || !frontendConfig.contractDurations.includes(duration) || !Number.isInteger(amount) || amount < 10 || amount > 1000) {
@@ -1966,46 +2102,37 @@ app.post('/api/time-contracts', requireMember, async (req, res) => {
   }
   const balance = await loadVirtualPointsBalance(personalId)
   if (balance < amount) return res.status(400).json({ error: '虚拟积分余额不足' })
-  virtualBalances.set(personalId, balance - amount)
+  if (!platformDatabaseConfig()) virtualBalances.set(personalId, balance - amount)
+  const createdAtMs = Date.now()
+  const createdAt = new Date(createdAtMs).toISOString()
+  const expiresAt = new Date(createdAtMs + duration * 1000).toISOString()
+  const curve = [...(project.marketCurve || project.curve)].map(Number)
+  const startedAt = Number(project.marketStartedAt) || createdAtMs
+  const intervalSeconds = Number(project.marketPointIntervalSeconds) || 5
+  const curveHash = createHash('sha256').update(JSON.stringify({ curve, startedAt, intervalSeconds, model: 'sim_curve_v1' })).digest('hex')
   const item = {
     id: randomUUID(), personalId, projectId, projectSymbol: project.symbol, direction, durationSeconds: duration, stake: amount,
-    status: 'pending', result: null, forcedResult: getOutcomePolicy('contracts', personalId), payoutPercent: timePayoutPercent(direction, projectId), entryPrice: project.sourceExchange ? project.lastPrice : project.curve[0], targetPrice: project.sourceExchange ? project.lastPrice : project.curve.at(-1), exitPrice: null, payout: null, profit: null,
-    createdAt: new Date().toISOString(), settledAt: null,
+    status: 'pending', result: null, forcedResult: getOutcomePolicy('contracts', personalId), payoutPercent: timePayoutPercent(direction, projectId),
+    entryPrice: simCurvePriceAt(curve, startedAt, intervalSeconds, createdAtMs),
+    targetPrice: simCurvePriceAt(curve, startedAt, intervalSeconds, createdAtMs + duration * 1000),
+    exitPrice: null, payout: null, profit: null, createdAt, expiresAt, settlementModel: 'sim_curve_v1',
+    settlementSource: 'SIM', settlementSnapshot: { model: 'sim_curve_v1', curve, startedAt, intervalSeconds, curveHash, tieTolerancePct: 0.01 },
+    settledAt: null,
   }
   predictions.set(item.id, item)
-  if (!(await persistOrderOrRespond(res, 'contracts', item))) {
+  const reserved = await reserveDemoOrderOrRespond(res, 'contracts', item, amount)
+  if (!reserved) {
     predictions.delete(item.id)
-    virtualBalances.set(personalId, balance)
+    if (!platformDatabaseConfig()) virtualBalances.set(personalId, balance)
     return
   }
-  const settlementTimer = setTimeout(async () => {
-    contractSettlementTimers.delete(item.id)
-    if (item.status !== 'pending') return
-    if (project.sourceExchange && !item.forcedResult) {
-      try {
-        await syncTimeContractProjects(true)
-        item.targetPrice = syncedTimeContractProjects.get(projectId)?.lastPrice ?? item.entryPrice
-      } catch { item.targetPrice = item.entryPrice }
-    }
-    const exitPrice = item.targetPrice
-    const delta = exitPrice - item.entryPrice
-    const result = item.forcedResult || (Math.abs(delta) < item.entryPrice * 0.0001 ? 'draw' : ((delta > 0) === (item.direction === 'up') ? 'won' : 'lost'))
-    if (result === 'draw') {
-      const previousPayout = item.payout || 0
-      item.status = result
-      item.result = result
-      item.exitPrice = exitPrice
-      item.payout = item.stake
-      item.profit = 0
-      item.settledAt = new Date().toISOString()
-      virtualBalances.set(item.personalId, rounded((virtualBalances.get(item.personalId) ?? 10000) + item.stake - previousPayout))
-      try { await savePlatformOrder('contracts', item) }
-      catch (error) { console.error('Unable to persist drawn time contract', error) }
-    } else {
-      settleContract(item, result)
-    }
-  }, duration * 1000)
-  contractSettlementTimers.set(item.id, settlementTimer)
+  if (!process.env.VERCEL) {
+    const settlementTimer = setTimeout(async () => {
+      contractSettlementTimers.delete(item.id)
+      await settleTimeContractFromSnapshot(item)
+    }, duration * 1000)
+    contractSettlementTimers.set(item.id, settlementTimer)
+  }
   while (predictions.size > 1000) {
     const oldestId = predictions.keys().next().value
     const oldestTimer = contractSettlementTimers.get(oldestId)

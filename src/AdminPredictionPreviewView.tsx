@@ -29,6 +29,7 @@ type ControlsSnapshot = {
   pendingContracts: number
   pendingForecasts: number
   pendingEtfOrders: number
+  manualOutcomePoliciesEnabled?: boolean
 }
 type ControlDraft = { scope: 'all' | 'user'; personalId: string }
 
@@ -52,6 +53,7 @@ export default function AdminPredictionPreviewView({ adminKey }: { adminKey: str
     pendingContracts: 0,
     pendingForecasts: 0,
     pendingEtfOrders: 0,
+    manualOutcomePoliciesEnabled: import.meta.env.DEV,
   })
   const [orders, setOrders] = useState<Order[]>([])
   const [orderFilter, setOrderFilter] = useState<'all' | 'pending' | Kind>('all')
@@ -63,6 +65,7 @@ export default function AdminPredictionPreviewView({ adminKey }: { adminKey: str
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [settlementRationale, setSettlementRationale] = useState('')
 
   const refresh = async (silent = false, signal?: AbortSignal) => {
     if (!silent) {
@@ -131,6 +134,10 @@ export default function AdminPredictionPreviewView({ adminKey }: { adminKey: str
   }
 
   const setOrderResult = async (order: Order, result: Result) => {
+    if (settlementRationale.trim().length < 10) {
+      setError('请先填写至少 10 个字符的结算依据')
+      return
+    }
     setBusy(true)
     setError('')
     setNotice('')
@@ -138,12 +145,13 @@ export default function AdminPredictionPreviewView({ adminKey }: { adminKey: str
       const response = await fetch('/api/admin/order-result', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', 'x-admin-key': adminKey },
-        body: JSON.stringify({ kind: order.kind, id: order.id, result }),
+        body: JSON.stringify({ kind: order.kind, id: order.id, result, rationale: settlementRationale.trim() }),
       })
       const data = await readAdminJson<{ order: Order }>(response, '设置订单结果')
       setOrders(current => current.map(item => item.id === order.id ? { ...item, ...data.order } : item))
       const before = order.status === 'won' ? '赢' : order.status === 'lost' ? '输' : order.status === 'draw' ? '平局' : '待处理'
       setNotice(`${kindName[order.kind]}订单 ${order.id.slice(0, 8)}：${before} → ${result === 'won' ? '赢' : '输'}。虚拟余额已按最新结果重新结算。`)
+      setSettlementRationale('')
       const controlsResponse = await fetch('/api/admin/outcome-controls', { headers: { 'x-admin-key': adminKey } })
       const controls = await readAdminJson<ControlsSnapshot>(controlsResponse, '刷新输赢控制状态')
       setSnapshot(controls)
@@ -172,7 +180,7 @@ export default function AdminPredictionPreviewView({ adminKey }: { adminKey: str
     return <section className="outcome-control-card">
       <div className="outcome-control-card-head"><div><b>{title}</b><p>{description}</p></div><span>{pending} 条待处理</span></div>
       {renderPolicy(kind)}
-      <div className="outcome-form">
+      {snapshot.manualOutcomePoliciesEnabled ? <><div className="outcome-form">
         <label>控制范围<select value={draft.scope} onChange={event => setDrafts(current => ({ ...current, [kind]: { ...draft, scope: event.target.value as ControlDraft['scope'] } }))}>
           <option value="all">全部虚拟账号</option>
           <option value="user">指定个人 ID</option>
@@ -189,6 +197,7 @@ export default function AdminPredictionPreviewView({ adminKey }: { adminKey: str
         : kind === 'forecasts'
           ? '待结算及后续预测按此结果结算；赢按事件收益比例返还虚拟积分，输扣除投入。'
           : '现有待处理订单立即结算；新单按订单金额扣款，赢按收益比例返还本金与收益，输扣除投入。'}</small>
+      </> : <div className="project-safety"><ShieldAlert size={15}/><span>公网已关闭批量和个人级强制输赢。模拟订单如需人工复核，必须逐笔填写依据，操作会记录后台账号与审计时间。</span></div>}
     </section>
   }
 
@@ -197,7 +206,7 @@ export default function AdminPredictionPreviewView({ adminKey }: { adminKey: str
       <div><div className="admin-eyebrow"><i/> SIM 演示控制</div><h1>输赢结果控制</h1><p>设置前台时间合约、合约 ETF 买卖单与事件预测的虚拟演示结果，可按全体或个人 ID 控制。</p></div>
       <button className="wallet-refresh" onClick={() => void refresh()} disabled={busy}><RefreshCw size={14} className={busy ? 'spinning' : ''}/>刷新状态</button>
     </div>
-    <div className="project-safety"><ShieldAlert size={16}/><span><b>只作用于虚拟演示账户</b> · 不涉及真实资金或市场，不改变逐点 SIM 行情；全体规则会清除同类个人覆盖规则。</span></div>
+    <div className="project-safety"><ShieldAlert size={16}/><span><b>只作用于虚拟演示账户</b> · 不涉及真实资金或市场。公网关闭批量输赢规则；单笔人工复核需填写依据并写入审计记录。</span></div>
     <section className="outcome-control-grid">
       {renderControls('contracts', '前台时间合约', '控制现有未结算合约及后续新合约的最终输赢结果。')}
       {renderControls('forecasts', '前台事件预测', '预测记录使用虚拟积分投入；赢返还本金及事件收益，输扣除投入。')}
@@ -205,7 +214,7 @@ export default function AdminPredictionPreviewView({ adminKey }: { adminKey: str
     </section>
     <section className="admin-orders-panel">
       <div className="admin-orders-head">
-        <div><h2>前台订单</h2><span>{orders.length} 笔 · 可逐笔设定或调整输赢</span></div>
+        <div><h2>前台订单</h2><span>{orders.length} 笔 · 只可对待处理模拟订单逐笔复核</span></div>
         <div className="admin-orders-filters">
           {([
             ['all', '全部'],
@@ -216,6 +225,7 @@ export default function AdminPredictionPreviewView({ adminKey }: { adminKey: str
           ] as const).map(([value, label]) => <button key={value} className={orderFilter === value ? 'active' : ''} onClick={() => setOrderFilter(value)}>{label}</button>)}
         </div>
       </div>
+      <label className="settlement-rationale-field">结算依据（单笔复核必填）<textarea value={settlementRationale} onChange={event => setSettlementRationale(event.target.value)} maxLength={500} rows={2} placeholder="填写事件来源、结算依据或复核说明，至少 10 个字符"/></label>
       {filteredOrders.length === 0 ? <div className="admin-orders-empty">暂无符合条件的前台订单。用户在前台下单或保存预测后，会显示在这里。</div> : <div className="admin-orders-list">
         {filteredOrders.map(order => <article className="admin-order-row" key={`${order.kind}:${order.id}`}>
           <div className="admin-order-summary">
@@ -229,8 +239,8 @@ export default function AdminPredictionPreviewView({ adminKey }: { adminKey: str
             </div>
           </div>
           <div className="admin-order-actions">
-            <button className="outcome-win" onClick={() => void setOrderResult(order, 'won')} disabled={busy}>设为赢</button>
-            <button className="outcome-loss" onClick={() => void setOrderResult(order, 'lost')} disabled={busy}>设为输</button>
+            {order.status === 'pending' && <><button className="outcome-win" onClick={() => void setOrderResult(order, 'won')} disabled={busy || settlementRationale.trim().length < 10}>复核为赢</button>
+            <button className="outcome-loss" onClick={() => void setOrderResult(order, 'lost')} disabled={busy || settlementRationale.trim().length < 10}>复核为输</button></>}
           </div>
         </article>)}
       </div>}

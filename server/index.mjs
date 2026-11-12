@@ -65,6 +65,98 @@ async function platformDatabaseRpc(functionName, body) {
   return await platformDatabaseRequest(`rpc/${functionName}`, '', { method: 'POST', body })
 }
 
+const persistentStateKey = {
+  settings: 'frontend_config', events: 'forecast_events', projects: 'demo_projects',
+  outcomes: 'outcome_policies', roles: 'permission_roles', staff: 'staff_users', agents: 'agents',
+}
+
+function snapshotPersistableState() {
+  const serializePolicies = () => Object.fromEntries(Object.entries(outcomePolicies).map(([kind, policy]) => [kind, { all: policy.all, users: Object.fromEntries(policy.users) }]))
+  return {
+    [persistentStateKey.settings]: frontendConfig,
+    [persistentStateKey.events]: forecastEvents,
+    [persistentStateKey.projects]: [...projects.values()],
+    [persistentStateKey.outcomes]: serializePolicies(),
+    [persistentStateKey.roles]: [...permissionRoles.values()],
+    [persistentStateKey.staff]: [...staffUsers.values()],
+    [persistentStateKey.agents]: [...agents.values()],
+  }
+}
+
+async function hydratePersistableState() {
+  const rows = await platformDatabaseRequest('platform_app_state', '?select=state_key,value&limit=20')
+  const state = new Map((rows || []).map(row => [row.state_key, row.value]))
+  const settings = state.get(persistentStateKey.settings)
+  if (settings && typeof settings === 'object' && !Array.isArray(settings)) Object.assign(frontendConfig, settings)
+  const events = state.get(persistentStateKey.events)
+  if (Array.isArray(events)) forecastEvents.splice(0, forecastEvents.length, ...events)
+  const storedProjects = state.get(persistentStateKey.projects)
+  if (Array.isArray(storedProjects)) {
+    projects.clear()
+    for (const project of storedProjects) if (project?.id) projects.set(project.id, project)
+  }
+  const storedPolicies = state.get(persistentStateKey.outcomes)
+  if (storedPolicies && typeof storedPolicies === 'object') {
+    for (const kind of ['contracts', 'forecasts', 'etfOrders']) {
+      const policy = storedPolicies[kind]
+      if (!policy || typeof policy !== 'object') continue
+      outcomePolicies[kind].all = ['won', 'lost'].includes(policy.all) ? policy.all : null
+      outcomePolicies[kind].users = new Map(Object.entries(policy.users || {}).filter(([id, result]) => validPersonalId(id) && ['won', 'lost'].includes(result)))
+    }
+  }
+  const storedRoles = state.get(persistentStateKey.roles)
+  if (Array.isArray(storedRoles)) {
+    permissionRoles.clear()
+    for (const role of storedRoles) if (role?.id) permissionRoles.set(role.id, role)
+  }
+  const storedStaff = state.get(persistentStateKey.staff)
+  if (Array.isArray(storedStaff)) {
+    staffUsers.clear()
+    for (const user of storedStaff) if (user?.id) staffUsers.set(user.id, user)
+  }
+  const storedAgents = state.get(persistentStateKey.agents)
+  if (Array.isArray(storedAgents)) {
+    agents.clear()
+    for (const agent of storedAgents) if (agent?.id) agents.set(agent.id, agent)
+  }
+}
+
+async function persistStateEntry(stateKey, value) {
+  await platformDatabaseRequest('platform_app_state?on_conflict=state_key', '', {
+    method: 'POST', body: { state_key: stateKey, value, updated_at: new Date().toISOString() },
+    prefer: 'resolution=merge-duplicates,return=minimal',
+  })
+}
+
+async function attachPersistentState(req, res, next) {
+  if (!platformDatabaseConfig()) return next()
+  try {
+    await hydratePersistableState()
+    const before = JSON.parse(JSON.stringify(snapshotPersistableState()))
+    const sendJson = res.json.bind(res)
+    let persisting = false
+    res.json = body => {
+      if (persisting || res.statusCode >= 400) return sendJson(body)
+      const after = snapshotPersistableState()
+      const changed = Object.entries(after).filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(before[key]))
+      if (!changed.length) return sendJson(body)
+      persisting = true
+      void Promise.all(changed.map(([key, value]) => persistStateEntry(key, value)))
+        .then(() => sendJson(body))
+        .catch(error => {
+          console.error('Unable to persist administrative state', error)
+          res.status(503)
+          sendJson({ error: '后台配置未能保存到数据库，请刷新后重试' })
+        })
+      return res
+    }
+    next()
+  } catch (error) {
+    console.error('Unable to load administrative state', error)
+    res.status(503).json({ error: '后台数据暂时无法读取，请稍后重试' })
+  }
+}
+
 function walletTransactionFromRow(row) {
   return {
     id: row.id, personalId: row.personal_id, type: row.type, currency: row.currency,
@@ -422,6 +514,7 @@ if (process.env.NODE_ENV === 'production' && adminKey === 'local-demo-admin') {
 
 app.disable('x-powered-by')
 app.use(express.json({ limit: '32kb' }))
+app.use('/api', attachPersistentState)
 
 app.post('/api/auth/signup', async (req, res) => {
   const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : ''
@@ -502,20 +595,12 @@ app.post('/api/admin/login', (req, res) => {
       const supplied = Buffer.from(hash, 'hex')
       const expected = Buffer.from(user.passwordHash, 'hex')
       if (supplied.length === expected.length && timingSafeEqual(supplied, expected)) {
-        session = { roleId: user.roleId, userId: user.id, expiresAt: Date.now() + 12 * 60 * 60 * 1000 }
+        session = { roleId: user.roleId, userId: user.id, sessionVersion: user.sessionVersion || 0, expiresAt: Date.now() + 12 * 60 * 60 * 1000 }
       }
     }
   }
   if (!session) return res.status(401).json({ error: '后台账号或密码无效' })
-  let token
-  if (session.roleId === 'superadmin' && !session.userId) {
-    const payloadText = Buffer.from(JSON.stringify({ roleId: 'superadmin', expiresAt: session.expiresAt })).toString('base64url')
-    const signatureText = createHmac('sha256', adminKey).update(payloadText).digest('base64url')
-    token = `${payloadText}.${signatureText}`
-  } else {
-    token = randomBytes(32).toString('hex')
-    adminSessions.set(token, session)
-  }
+  const token = signAdminSession(session)
   const user = session.userId ? staffUsers.get(session.userId) : null
   res.json({
     token,
@@ -536,6 +621,10 @@ app.get('/api/admin/session', requireAdmin, (req, res) => {
 
 app.post('/api/admin/logout', requireAdmin, (req, res) => {
   if (req.admin.token) adminSessions.delete(req.admin.token)
+  if (req.admin.userId) {
+    const user = staffUsers.get(req.admin.userId)
+    if (user) user.sessionVersion = (user.sessionVersion || 0) + 1
+  }
   res.json({ ok: true })
 })
 
@@ -553,6 +642,7 @@ app.patch('/api/admin/change-password', requireAdmin, (req, res) => {
   user.passwordSalt = credential.salt
   user.passwordHash = credential.hash
   user.mustChangePassword = false
+  user.sessionVersion = (user.sessionVersion || 0) + 1
   res.json({ ok: true })
 })
 
@@ -606,10 +696,12 @@ app.patch('/api/admin/staff-users/:id', requireRootAdmin, (req, res) => {
   if (roleId !== undefined) {
     if (typeof roleId !== 'string' || roleId === 'superadmin' || !permissionRoles.has(roleId)) return res.status(400).json({ error: '请选择有效的后台角色' })
     user.roleId = roleId
+    user.sessionVersion = (user.sessionVersion || 0) + 1
   }
   if (active !== undefined) {
     if (typeof active !== 'boolean') return res.status(400).json({ error: '账号状态无效' })
     user.active = active
+    if (!active) user.sessionVersion = (user.sessionVersion || 0) + 1
     if (!active) for (const [token, session] of adminSessions) if (session.userId === user.id) adminSessions.delete(token)
   }
   if (password !== undefined) {
@@ -618,6 +710,7 @@ app.patch('/api/admin/staff-users/:id', requireRootAdmin, (req, res) => {
     user.passwordSalt = credential.salt
     user.passwordHash = credential.hash
     user.mustChangePassword = true
+    user.sessionVersion = (user.sessionVersion || 0) + 1
     for (const [token, session] of adminSessions) if (session.userId === user.id) adminSessions.delete(token)
   }
   res.json({ user: safeStaffUser(user) })
@@ -641,9 +734,18 @@ function requireAdmin(req, res, next) {
         payload = JSON.parse(Buffer.from(payloadText, 'base64url').toString('utf8'))
       }
     } catch { /* malformed stateless token */ }
-    if (payload?.roleId === 'superadmin' && Number.isFinite(payload.expiresAt) && payload.expiresAt > Date.now()) {
-      req.admin = { roleId: 'superadmin', root: true, token: suppliedText, mustChangePassword: false }
-      return next()
+    if (Number.isFinite(payload?.expiresAt) && payload.expiresAt > Date.now()) {
+      if (payload.roleId === 'superadmin' && !payload.userId) {
+        req.admin = { roleId: 'superadmin', root: true, token: suppliedText, mustChangePassword: false }
+        return next()
+      }
+      if (typeof payload.userId === 'string') {
+        const user = staffUsers.get(payload.userId)
+        if (!user || !user.active) return res.status(401).json({ error: '后台账号已停用，请联系超级管理员' })
+        if (payload.sessionVersion !== (user.sessionVersion || 0)) return res.status(401).json({ error: '后台会话已失效，请重新登录' })
+        req.admin = { roleId: user.roleId, root: false, token: suppliedText, userId: user.id, mustChangePassword: user.mustChangePassword }
+        return next()
+      }
     }
   }
   const session = adminSessions.get(suppliedText)
@@ -695,6 +797,15 @@ function safeStaffUser(user) {
 
 function hashPassword(password, salt = randomBytes(16).toString('hex')) {
   return { salt, hash: scryptSync(password, salt, 64).toString('hex') }
+}
+
+function signAdminSession(session) {
+  const payloadText = Buffer.from(JSON.stringify({
+    roleId: session.roleId, userId: session.userId || null, sessionVersion: session.sessionVersion,
+    expiresAt: session.expiresAt,
+  })).toString('base64url')
+  const signatureText = createHmac('sha256', adminKey).update(payloadText).digest('base64url')
+  return `${payloadText}.${signatureText}`
 }
 
 function validPassword(password) {
@@ -1249,6 +1360,7 @@ app.get('/api/admin/projects', requirePermission('projects'), (_req, res) => {
 app.get('/api/admin/outcome-controls', requirePermission('prediction-preview'), (_req, res) => {
   const serialize = policy => ({ all: policy.all, users: Object.fromEntries(policy.users) })
   res.json({
+    manualOutcomePoliciesEnabled: !process.env.VERCEL,
     policies: { contracts: serialize(outcomePolicies.contracts), forecasts: serialize(outcomePolicies.forecasts), etfOrders: serialize(outcomePolicies.etfOrders) },
     pendingContracts: [...predictions.values()].filter(item => item.status === 'pending').length,
     pendingForecasts: [...forecasts.values()].filter(item => item.status === 'pending').length,
@@ -1257,6 +1369,7 @@ app.get('/api/admin/outcome-controls', requirePermission('prediction-preview'), 
 })
 
 app.put('/api/admin/outcome-controls/:kind', requirePermission('prediction-preview'), (req, res) => {
+  if (process.env.VERCEL) return res.status(403).json({ error: '公网环境已关闭全局或按个人 ID 强制输赢；请在虚拟订单中填写结算依据后逐笔复核' })
   const { kind } = req.params
   if (!['contracts', 'forecasts', 'etfOrders'].includes(kind)) return res.status(404).json({ error: '输赢控制类型无效' })
   const { target, result } = req.body || {}
@@ -1350,10 +1463,11 @@ app.get('/api/admin/orders', requirePermission('prediction-preview'), async (_re
   res.json({ orders })
 })
 
-async function applyAdminOrderResult(kind, id, result, res) {
+async function applyAdminOrderResult(kind, id, result, res, { actor = 'superadmin', rationale = '' } = {}) {
   if (!['contracts', 'forecasts', 'etfOrders'].includes(kind)) return res.status(404).json({ error: '订单类型无效' })
   if (!['won', 'lost'].includes(result)) return res.status(400).json({ error: '订单结果必须为赢或输' })
   if (typeof id !== 'string' || !id || id.length > 100) return res.status(400).json({ error: '订单 ID 无效' })
+  if (typeof rationale !== 'string' || rationale.trim().length < 10 || rationale.length > 500) return res.status(400).json({ error: '结算依据须为 10–500 个字符' })
 
   let order
   if (kind === 'contracts') order = predictions.get(id)
@@ -1395,8 +1509,19 @@ async function applyAdminOrderResult(kind, id, result, res) {
   else if (kind === 'forecasts') settleForecast(order, result, { persist: false })
   else settleEtfOrder(order, result, { persist: false })
   try {
-    const persisted = await savePlatformOrder(kind, order)
-    if (!persisted && process.env.VERCEL) {
+    if (platformDatabaseConfig()) {
+      await platformDatabaseRpc('settle_platform_order_with_audit', {
+        p_order_id: id, p_kind: kind, p_order_data: order,
+        p_actor: actor, p_rationale: rationale.trim(),
+      })
+    } else {
+      const persisted = await savePlatformOrder(kind, order)
+      if (!persisted && process.env.VERCEL) {
+        restoreCachedBalance()
+        return res.status(503).json({ error: '订单数据库尚未配置，结果未保存' })
+      }
+    }
+    if (!platformDatabaseConfig() && process.env.VERCEL) {
       restoreCachedBalance()
       return res.status(503).json({ error: '订单数据库尚未配置，结果未保存' })
     }
@@ -1413,13 +1538,15 @@ async function applyAdminOrderResult(kind, id, result, res) {
 
 // Keep the admin mutation path shallow for serverless routing and resolve persisted orders across instances.
 app.patch('/api/admin/order-result', requirePermission('prediction-preview'), async (req, res) => {
-  const { kind, id, result } = req.body || {}
-  await applyAdminOrderResult(kind, id, result, res)
+  const { kind, id, result, rationale } = req.body || {}
+  const actor = req.admin.userId ? staffUsers.get(req.admin.userId)?.username : 'superadmin'
+  await applyAdminOrderResult(kind, id, result, res, { actor: actor || 'superadmin', rationale })
 })
 
 app.patch('/api/admin/orders/:kind/:id/result', requirePermission('prediction-preview'), async (req, res) => {
   const { kind, id } = req.params
-  await applyAdminOrderResult(kind, id, req.body?.result, res)
+  const actor = req.admin.userId ? staffUsers.get(req.admin.userId)?.username : 'superadmin'
+  await applyAdminOrderResult(kind, id, req.body?.result, res, { actor: actor || 'superadmin', rationale: req.body?.rationale })
 })
 
 app.post('/api/admin/projects', requirePermission('projects'), (req, res) => {

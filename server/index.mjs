@@ -1207,6 +1207,67 @@ async function syncExchangeEvents() {
 }
 app.get('/api/exchange-events', async (_req, res) => res.json(await syncExchangeEvents()))
 async function syncMarketQuotes() {
+  const alpacaKey = process.env.ALPACA_DATA_API_KEY_ID?.trim()
+  const alpacaSecret = process.env.ALPACA_DATA_API_SECRET_KEY?.trim()
+  if (alpacaKey && alpacaSecret) {
+    const alpacaPublicDisplayAuthorized = process.env.ALPACA_PUBLIC_DISPLAY_AUTHORIZED === 'true'
+    if (process.env.NODE_ENV === 'production' && !alpacaPublicDisplayAuthorized) {
+      return {
+        provider: 'Alpaca IEX', configured: true, connected: false,
+        message: '已配置 Alpaca 免费 IEX 密钥；公网行情展示需先确认数据授权并启用 ALPACA_PUBLIC_DISPLAY_AUTHORIZED。当前显示 SIM 参考价。',
+        updatedAt: null, quotes: {},
+      }
+    }
+    if (marketQuotesCache.payload?.provider === 'Alpaca IEX' && marketQuotesCache.expiresAt > Date.now()) return marketQuotesCache.payload
+    const symbols = [...new Set(frontendConfig.marketAssets.map(asset => asset.symbol.trim().toUpperCase()).filter(Boolean))].slice(0, 30)
+    try {
+      const url = new URL('https://data.alpaca.markets/v2/stocks/snapshots')
+      url.searchParams.set('symbols', symbols.join(','))
+      url.searchParams.set('feed', 'iex')
+      const response = await fetch(url, {
+        signal: AbortSignal.timeout(10000),
+        headers: {
+          accept: 'application/json',
+          'APCA-API-KEY-ID': alpacaKey,
+          'APCA-API-SECRET-KEY': alpacaSecret,
+        },
+      })
+      if (!response.ok) throw new Error(`Alpaca 行情返回 HTTP ${response.status}`)
+      const data = await response.json()
+      const quotes = {}
+      for (const [symbol, snapshot] of Object.entries(data || {})) {
+        const last = Number(snapshot?.latestTrade?.p ?? snapshot?.dailyBar?.c ?? snapshot?.prevDailyBar?.c)
+        const previousClose = Number(snapshot?.prevDailyBar?.c)
+        if (!Number.isFinite(last) || last <= 0) continue
+        const dayVolume = Number(snapshot?.dailyBar?.v)
+        const dayVwap = Number(snapshot?.dailyBar?.vw)
+        quotes[symbol] = {
+          last: rounded(last),
+          change: Number.isFinite(previousClose) && previousClose > 0 ? rounded((last - previousClose) / previousClose * 100) : 0,
+          volume: Number.isFinite(dayVolume) && dayVolume > 0 && Number.isFinite(dayVwap) && dayVwap > 0
+            ? formatTurnover(dayVolume * dayVwap)
+            : '—',
+          updatedAt: snapshot?.latestTrade?.t || snapshot?.dailyBar?.t || new Date().toISOString(),
+        }
+      }
+      if (!Object.keys(quotes).length) throw new Error('Alpaca IEX 没有返回可用标的报价')
+      const payload = {
+        provider: 'Alpaca IEX', configured: true, connected: true,
+        message: 'Alpaca 免费 IEX 行情已连接；仅覆盖 IEX 单一交易所，成交量也为该来源数据。用于公开商业展示前须向数据方确认授权。',
+        updatedAt: new Date().toISOString(), quotes,
+      }
+      marketQuotesCache = { payload, expiresAt: Date.now() + 15000 }
+      return payload
+    } catch (error) {
+      return {
+        provider: 'Alpaca IEX', configured: true, connected: false,
+        message: error instanceof Error ? `Alpaca IEX 行情连接失败：${error.message}；当前显示 SIM 参考价。` : 'Alpaca IEX 行情连接失败；当前显示 SIM 参考价。',
+        updatedAt: marketQuotesCache.payload?.provider === 'Alpaca IEX' ? marketQuotesCache.payload.updatedAt : null,
+        quotes: marketQuotesCache.payload?.provider === 'Alpaca IEX' ? marketQuotesCache.payload.quotes : {},
+      }
+    }
+  }
+
   // Twelve Data's free Basic tier is for testing/internal use. Keep it
   // unavailable to public production deployments and cap usage at 8 symbols
   // refreshed every 15 minutes (8 × 96 = 768 requests/day).
@@ -1239,7 +1300,7 @@ async function syncMarketQuotes() {
   }
   const apiKey = process.env.MASSIVE_API_KEY?.trim()
   const publicDisplayLicensed = process.env.MASSIVE_PUBLIC_DISPLAY_LICENSED === 'true'
-  if (!apiKey || !publicDisplayLicensed) return { provider: 'SIM', configured: Boolean(apiKey), connected: false, message: !apiKey ? 'Massive 行情 API Key 尚未配置；当前为演示价格。' : '已配置行情 API Key，但公网展示授权未启用；当前为演示价格。', updatedAt: null, quotes: {} }
+  if (!apiKey || !publicDisplayLicensed) return { provider: 'SIM', configured: Boolean(apiKey), connected: false, message: !apiKey ? '免费 Alpaca IEX 行情 API 密钥尚未配置；当前显示 SIM 参考价。' : '已配置 Massive 行情 API Key，但公网展示授权未启用；当前显示 SIM 参考价。', updatedAt: null, quotes: {} }
   if (marketQuotesCache.payload && marketQuotesCache.expiresAt > Date.now()) return marketQuotesCache.payload
   const symbols = frontendConfig.marketAssets.map(asset => asset.symbol).filter(Boolean)
   const url = new URL('https://api.massive.com/v2/snapshot/locale/us/markets/stocks/tickers')

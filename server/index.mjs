@@ -1,6 +1,7 @@
 import express from 'express'
 import { createHash, createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
 import { calculateCpmmPurchase, getCpmmProbability } from './prediction-market.mjs'
+import { createSupabaseAuth } from './supabase-auth.mjs'
 import { getDirectWalletStatus } from './wallet-chain.mjs'
 
 const app = express()
@@ -39,6 +40,8 @@ function platformDatabaseConfig() {
   return url && secretKey ? { url, secretKey } : null
 }
 
+const supabaseAuth = createSupabaseAuth({ getConfig: platformDatabaseConfig })
+
 async function platformDatabaseRequest(table, query = '', { method = 'GET', body, prefer } = {}) {
   const config = platformDatabaseConfig()
   if (!config) return null
@@ -56,6 +59,33 @@ async function platformDatabaseRequest(table, query = '', { method = 'GET', body
   if (response.status === 204) return null
   const text = await response.text()
   return text ? JSON.parse(text) : null
+}
+
+async function platformDatabaseRpc(functionName, body) {
+  return await platformDatabaseRequest(`rpc/${functionName}`, '', { method: 'POST', body })
+}
+
+function walletTransactionFromRow(row) {
+  return {
+    id: row.id, personalId: row.personal_id, type: row.type, currency: row.currency,
+    amount: Number(row.amount), fee: Number(row.fee), network: row.network, address: row.address || '',
+    status: row.status, reason: row.reason || '', createdAt: row.created_at, reviewedAt: row.reviewed_at,
+  }
+}
+
+async function loadWalletSnapshot(personalId) {
+  if (!platformDatabaseConfig()) {
+    const transactions = [...walletTransactions.values()].filter(row => row.personalId === personalId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    const balances = Object.fromEntries(depositCurrencies.map(currency => [currency, walletBalances.get(walletBalanceKey(personalId, currency)) || 0]))
+    return { transactions, balances }
+  }
+  const [accounts, rows] = await Promise.all([
+    platformDatabaseRequest('platform_wallet_accounts', `?select=currency,balance&personal_id=eq.${encodeURIComponent(personalId)}`),
+    platformDatabaseRequest('platform_wallet_transactions', `?select=*&personal_id=eq.${encodeURIComponent(personalId)}&order=created_at.desc&limit=200`),
+  ])
+  const balances = Object.fromEntries(depositCurrencies.map(currency => [currency, 0]))
+  for (const account of accounts || []) balances[account.currency] = Number(account.balance)
+  return { transactions: (rows || []).map(walletTransactionFromRow), balances }
 }
 
 function serializePlatformOrder(kind, item) {
@@ -151,6 +181,7 @@ async function savePlatformMember(member) {
       agent_id: member.agentId || null,
       created_at: member.createdAt,
       kyc_status: member.kycStatus || 'unverified',
+      ...(member.authUserId ? { auth_user_id: member.authUserId } : {}),
     },
     prefer: 'resolution=merge-duplicates,return=minimal',
   })
@@ -159,7 +190,100 @@ async function savePlatformMember(member) {
 
 async function loadPlatformMembers() {
   if (!platformDatabaseConfig()) return null
-  return await platformDatabaseRequest('platform_members', '?select=personal_id,email,inviter_id,agent_id,created_at,kyc_status&order=created_at.desc&limit=1000') || []
+  return await platformDatabaseRequest('platform_members', '?select=personal_id,email,inviter_id,agent_id,created_at,kyc_status,auth_user_id&order=created_at.desc&limit=1000') || []
+}
+
+async function loadPlatformMemberByAuthId(authUserId) {
+  if (!platformDatabaseConfig()) return null
+  const rows = await platformDatabaseRequest('platform_members', `?select=personal_id,email,inviter_id,agent_id,created_at,kyc_status,auth_user_id&auth_user_id=eq.${encodeURIComponent(authUserId)}&limit=1`)
+  return rows?.[0] || null
+}
+
+async function loadPlatformMemberByEmail(email) {
+  if (!platformDatabaseConfig()) return null
+  const rows = await platformDatabaseRequest('platform_members', `?select=personal_id,email,inviter_id,agent_id,created_at,kyc_status,auth_user_id&email=eq.${encodeURIComponent(email)}&limit=1`)
+  return rows?.[0] || null
+}
+
+function publicAccount(member) {
+  return {
+    personalId: member.personal_id,
+    email: member.email,
+    inviterId: member.inviter_id || '',
+    agentId: member.agent_id || '',
+    createdAt: member.created_at,
+    kycStatus: member.kyc_status || 'unverified',
+  }
+}
+
+async function ensureMemberForAuthUser(user, referralCode = '') {
+  let member = await loadPlatformMemberByAuthId(user.id)
+  if (member) return member
+  const email = String(user.email || '').trim().toLowerCase()
+  if (!email) throw new Error('Supabase Auth 未返回邮箱')
+  const existing = await loadPlatformMemberByEmail(email)
+  const emailVerified = Boolean(user.email_confirmed_at || user.confirmed_at)
+  if (existing) {
+    if (existing.auth_user_id && existing.auth_user_id !== user.id) throw new Error('该邮箱已绑定其他登录账户')
+    if (!emailVerified) return null
+    const updated = await platformDatabaseRequest('platform_members', `?personal_id=eq.${encodeURIComponent(existing.personal_id)}&auth_user_id=is.null`, {
+      method: 'PATCH', body: { auth_user_id: user.id }, prefer: 'return=representation',
+    })
+    member = updated?.[0] || await loadPlatformMemberByAuthId(user.id)
+    if (!member) throw new Error('无法绑定现有成员资料')
+    return member
+  }
+
+  let inviterId = ''
+  let agentId = ''
+  const referral = String(referralCode || '').trim().toUpperCase()
+  if (referral.startsWith('NST-')) {
+    const inviter = await platformDatabaseRequest('platform_members', `?select=personal_id&personal_id=eq.${encodeURIComponent(referral)}&limit=1`)
+    if (!inviter?.length) throw new Error('邀请链接无效')
+    inviterId = referral
+  } else if (referral.startsWith('AG-')) {
+    const agent = [...agents.values()].find(item => item.code === referral && item.active)
+    if (!agent) throw new Error('代理邀请链接无效或代理已停用')
+    agentId = agent.id
+  } else if (referral) throw new Error('邀请链接无效')
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const personalId = `NST-${randomBytes(4).toString('hex').toUpperCase()}`
+    const account = { personalId, email, createdAt: new Date().toISOString(), inviterId, agentId, authUserId: user.id }
+    try {
+      await savePlatformMember(account)
+      userAccounts.set(personalId, account)
+      return await loadPlatformMemberByAuthId(user.id) || {
+        personal_id: personalId, email, inviter_id: inviterId, agent_id: agentId,
+        created_at: account.createdAt, kyc_status: 'unverified', auth_user_id: user.id,
+      }
+    } catch (error) {
+      const raced = await loadPlatformMemberByAuthId(user.id)
+      if (raced) return raced
+      if (attempt === 3) throw error
+    }
+  }
+  throw new Error('账户资料创建失败')
+}
+
+async function requireMember(req, res, next) {
+  if (!platformDatabaseConfig() && !process.env.VERCEL) {
+    const personalId = req.query.personalId || req.body?.personalId
+    if (!validPersonalId(personalId)) return res.status(401).json({ error: '请先登录账户' })
+    req.member = { personalId, email: String(req.query.email || req.body?.email || '') }
+    return next()
+  }
+  try {
+    const user = await supabaseAuth.currentUser(req, res)
+    if (!user) return res.status(401).json({ error: '登录已失效，请重新登录' })
+    const member = await loadPlatformMemberByAuthId(user.id)
+    if (!member) return res.status(403).json({ error: '账户资料尚未绑定，请重新登录或完成邮箱验证' })
+    req.member = publicAccount(member)
+    next()
+  } catch (error) {
+    console.error('Unable to validate member session', error)
+    res.status(503).json({ error: '账户服务暂不可用，请稍后重试' })
+  }
 }
 const permissionModules = [
   { id: 'kyc', name: 'KYC 身份审核' },
@@ -298,6 +422,69 @@ if (process.env.NODE_ENV === 'production' && adminKey === 'local-demo-admin') {
 
 app.disable('x-powered-by')
 app.use(express.json({ limit: '32kb' }))
+
+app.post('/api/auth/signup', async (req, res) => {
+  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : ''
+  const password = req.body?.password
+  const referralCode = typeof req.body?.referralCode === 'string' ? req.body.referralCode.trim().toUpperCase() : ''
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || typeof password !== 'string' || password.length < 8 || password.length > 128) {
+    return res.status(400).json({ error: '邮箱格式无效，密码须为 8–128 位' })
+  }
+  if (!platformDatabaseConfig() && !process.env.VERCEL) {
+    if ([...userAccounts.values()].some(account => account.email === email)) return res.status(409).json({ error: '该邮箱已创建本地演示账户' })
+    const personalId = `NST-${randomBytes(4).toString('hex').toUpperCase()}`
+    userAccounts.set(personalId, { personalId, email, createdAt: new Date().toISOString(), inviterId: '', agentId: '' })
+    return res.status(201).json({ ok: true, account: { personalId, email, kycStatus: 'unverified' }, demoOnly: true })
+  }
+  if (!platformDatabaseConfig()) return res.status(503).json({ error: '账户服务暂未配置，请稍后重试' })
+  try {
+    const { response, data } = await supabaseAuth.signUp(email, password, referralCode)
+    if (!response.ok) {
+      const status = response.status === 429 ? 429 : response.status >= 500 ? 503 : 400
+      return res.status(status).json({ error: status === 429 ? '注册请求过于频繁，请稍后重试' : status === 503 ? '账户服务暂不可用' : '注册失败，请检查邮箱或确认该邮箱尚未注册' })
+    }
+    const user = data.user || data
+    if (!user.id || (Array.isArray(user.identities) && user.identities.length === 0)) {
+      return res.status(400).json({ error: '注册失败，请检查邮箱或确认该邮箱尚未注册' })
+    }
+    const member = await ensureMemberForAuthUser(user, referralCode)
+    if (member && supabaseAuth.setSessionCookies(res, data)) {
+      return res.status(201).json({ ok: true, account: publicAccount(member), needsEmailConfirmation: false })
+    }
+    res.status(201).json({ ok: true, needsEmailConfirmation: true, message: '请先完成邮箱验证，然后用邮箱和密码登录。' })
+  } catch (error) {
+    console.error('Unable to create authenticated member', error)
+    res.status(503).json({ error: '账户资料暂未保存，请稍后重试；可使用相同邮箱和密码继续登录' })
+  }
+})
+
+app.post('/api/auth/login', async (req, res) => {
+  if (!platformDatabaseConfig() && !process.env.VERCEL) return res.status(503).json({ error: '本地演示账户不验证密码；公网账户可使用 Supabase Auth 登录' })
+  if (!platformDatabaseConfig()) return res.status(503).json({ error: '账户服务暂未配置，请稍后重试' })
+  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : ''
+  const password = req.body?.password
+  if (!email || typeof password !== 'string' || password.length > 128) return res.status(400).json({ error: '请输入有效邮箱和密码' })
+  try {
+    const { response, data } = await supabaseAuth.signIn(email, password)
+    if (!response.ok || !data.user) {
+      const status = response.status === 429 ? 429 : response.status >= 500 ? 503 : 401
+      return res.status(status).json({ error: status === 429 ? '登录请求过于频繁，请稍后重试' : status === 503 ? '账户服务暂不可用' : '邮箱或密码不正确，或邮箱尚未验证' })
+    }
+    const member = await ensureMemberForAuthUser(data.user)
+    if (!member) return res.status(403).json({ error: '请先完成邮箱验证，再登录账户' })
+    supabaseAuth.setSessionCookies(res, data)
+    res.json({ ok: true, account: publicAccount(member) })
+  } catch (error) {
+    console.error('Unable to sign in member', error)
+    res.status(503).json({ error: '账户服务暂不可用，请稍后重试' })
+  }
+})
+
+app.get('/api/account', requireMember, (req, res) => res.json({ account: req.member }))
+app.post('/api/auth/logout', (_req, res) => {
+  supabaseAuth.clearSessionCookies(res)
+  res.json({ ok: true })
+})
 
 app.post('/api/admin/login', (req, res) => {
   const { masterKey, username, password } = req.body || {}
@@ -536,6 +723,15 @@ function safeSubmission(item) {
   }
 }
 
+function kycSubmissionFromRow(row) {
+  return {
+    id: row.id, personalId: row.personal_id, email: row.email, legalName: row.legal_name,
+    country: row.country, birthDate: row.birth_date, documentType: row.document_type,
+    documentLast4: row.document_last4, documents: row.documents || {}, status: row.status,
+    reason: row.reason || '', submittedAt: row.submitted_at, reviewedAt: row.reviewed_at,
+  }
+}
+
 const validPersonalId = value => typeof value === 'string' && /^NST-[A-Z0-9]{8}$/.test(value)
 const latestKyc = personalId => [...submissions.values()].filter(row => row.personalId === personalId).sort((a, b) => b.submittedAt.localeCompare(a.submittedAt))[0]
 const rounded = value => Math.round(value * 100) / 100
@@ -566,18 +762,19 @@ function safeTransaction(item) {
   return {
     id: item.id, personalId: item.personalId, type: item.type, currency: item.currency || 'USDT', amount: item.amount, fee: item.fee,
     network: item.network, addressMasked: item.address ? addressMask(item.address) : '',
-    status: item.status, reason: item.reason, createdAt: item.createdAt, reviewedAt: item.reviewedAt,
+    status: item.status === 'approved' ? 'completed' : item.status, reason: item.reason, createdAt: item.createdAt, reviewedAt: item.reviewedAt,
   }
 }
 
 function verifyWalletRequest(req, res) {
-  const { personalId } = req.body || {}
+  const personalId = req.member?.personalId
   if (!validPersonalId(personalId)) {
-    res.status(400).json({ error: '个人 ID 无效' })
+    res.status(401).json({ error: '请先登录账户' })
     return false
   }
   const account = latestKyc(personalId)
-  if (!account || account.status !== 'approved') {
+  const approved = req.member.kycStatus === 'verified' || account?.status === 'approved'
+  if (!approved) {
     res.status(403).json({ error: '该个人 ID 尚未通过 KYC 后台审核' })
     return false
   }
@@ -1349,6 +1546,9 @@ app.delete('/api/admin/agents/:id', requirePermission('agents'), (req, res) => {
 // Public referral registration endpoint. It intentionally lives under the same
 // Vercel function route as admin agent management so both paths share agent state.
 app.post('/api/admin/agents/register', async (req, res) => {
+  if (process.env.VERCEL || platformDatabaseConfig()) {
+    return res.status(410).json({ error: '请先通过邮箱验证创建账户，再使用代理邀请链接注册' })
+  }
   const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : ''
   const personalId = typeof req.body?.personalId === 'string' ? req.body.personalId.trim().toUpperCase() : ''
   const code = typeof req.body?.referralCode === 'string' ? req.body.referralCode.trim().toUpperCase() : ''
@@ -1377,6 +1577,9 @@ app.post('/api/admin/agents/register', async (req, res) => {
 
 // Public demo registration records account metadata only. Passwords are never accepted or stored.
 app.post('/api/register', async (req, res) => {
+  if (process.env.VERCEL || platformDatabaseConfig()) {
+    return res.status(410).json({ error: '请使用带邮箱验证的账户注册流程' })
+  }
   const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : ''
   const personalId = typeof req.body?.personalId === 'string' ? req.body.personalId.trim().toUpperCase() : ''
   const referralCode = typeof req.body?.referralCode === 'string' ? req.body.referralCode.trim().toUpperCase() : ''
@@ -1419,6 +1622,14 @@ app.post('/api/register', async (req, res) => {
 
 app.get('/api/admin/members', requirePermission('members'), async (_req, res) => {
   const storedMembers = await loadPlatformMembers()
+  const storedOrders = await loadPlatformOrders()
+  const storedWalletRows = platformDatabaseConfig()
+    ? await platformDatabaseRequest('platform_wallet_transactions', '?select=personal_id&limit=5000')
+    : null
+  const orderCounts = new Map()
+  for (const row of storedOrders || []) orderCounts.set(row.item.personalId, (orderCounts.get(row.item.personalId) || 0) + 1)
+  const walletCounts = new Map()
+  for (const row of storedWalletRows || []) walletCounts.set(row.personal_id, (walletCounts.get(row.personal_id) || 0) + 1)
   const members = new Map((storedMembers || []).map(item => [item.personal_id, {
     personalId: item.personal_id, email: item.email, inviterId: item.inviter_id || '',
     agentId: item.agent_id || '', createdAt: item.created_at, kycStatus: item.kyc_status,
@@ -1449,8 +1660,8 @@ app.get('/api/admin/members', requirePermission('members'), async (_req, res) =>
     inviterId: member.inviterId || '',
     agentId: member.agentId || '',
     kycStatus: member.kycStatus || 'unverified',
-    walletTransactions: [...walletTransactions.values()].filter(item => item.personalId === member.personalId).length,
-    orderCount: [...etfOrders.values()].filter(item => item.personalId === member.personalId).length + [...predictions.values()].filter(item => item.personalId === member.personalId).length + [...forecasts.values()].filter(item => item.personalId === member.personalId).length,
+    walletTransactions: walletCounts.get(member.personalId) || [...walletTransactions.values()].filter(item => item.personalId === member.personalId).length,
+    orderCount: orderCounts.get(member.personalId) || [...etfOrders.values()].filter(item => item.personalId === member.personalId).length + [...predictions.values()].filter(item => item.personalId === member.personalId).length + [...forecasts.values()].filter(item => item.personalId === member.personalId).length,
   })).sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
   res.json({ members: rows, persistence: platformDatabaseConfig() ? 'supabase' : 'ephemeral-demo' })
 })
@@ -1463,6 +1674,9 @@ app.get('/api/referrals/:personalId', (req, res) => {
 })
 
 app.post('/api/referrals/register', async (req, res) => {
+  if (process.env.VERCEL || platformDatabaseConfig()) {
+    return res.status(410).json({ error: '请先通过邮箱验证创建账户，邀请关系会在注册时绑定' })
+  }
   const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : ''
   const personalId = typeof req.body?.personalId === 'string' ? req.body.personalId.trim().toUpperCase() : ''
   const inviterId = typeof req.body?.referralCode === 'string' ? req.body.referralCode.trim().toUpperCase() : ''
@@ -1488,9 +1702,9 @@ app.get('/api/time-contracts/quote', (req, res) => {
   res.json({ payoutPercent: timePayoutPercent(direction, String(req.query.projectId || '')), autoAdjusted: frontendConfig.autoPayoutEnabled })
 })
 
-app.get('/api/time-contracts', async (req, res) => {
+app.get('/api/time-contracts', requireMember, async (req, res) => {
   if (!frontendConfig.showTimeContracts) return res.status(403).json({ error: '后台已关闭时间合约模块' })
-  const personalId = String(req.query.personalId || '')
+  const personalId = req.member.personalId
   if (!validPersonalId(personalId)) return res.status(400).json({ error: '请先注册并绑定个人 ID' })
   const stored = await loadPlatformOrders(personalId)
   const itemsById = new Map((stored || []).filter(row => row.kind === 'contracts').map(row => [row.item.id, row.item]))
@@ -1499,9 +1713,9 @@ app.get('/api/time-contracts', async (req, res) => {
   res.json({ personalId, balance: await loadVirtualPointsBalance(personalId, stored), contracts: items.slice(0, 20).map(publicPrediction) })
 })
 
-app.get('/api/forecasts', async (req, res) => {
+app.get('/api/forecasts', requireMember, async (req, res) => {
   if (!frontendConfig.showPrediction) return res.status(403).json({ error: '后台已关闭预测系统' })
-  const personalId = String(req.query.personalId || '')
+  const personalId = req.member.personalId
   if (!validPersonalId(personalId)) return res.status(400).json({ error: '请先注册并绑定个人 ID' })
   const stored = await loadPlatformOrders(personalId)
   const itemsById = new Map((stored || []).filter(row => row.kind === 'forecasts').map(row => [row.item.id, row.item]))
@@ -1510,9 +1724,10 @@ app.get('/api/forecasts', async (req, res) => {
   res.json({ personalId, balance: await loadVirtualPointsBalance(personalId, stored), forecasts: items.slice(0, 50) })
 })
 
-app.post('/api/forecasts', async (req, res) => {
+app.post('/api/forecasts', requireMember, async (req, res) => {
   if (!frontendConfig.showPrediction) return res.status(403).json({ error: '后台已关闭预测系统' })
-  const { personalId, eventId, probability, choice: requestedChoice, rationale = '' } = req.body || {}
+  const { eventId, probability, choice: requestedChoice, rationale = '' } = req.body || {}
+  const personalId = req.member.personalId
   const stake = Number(req.body?.stake)
   if (!validPersonalId(personalId)) return res.status(400).json({ error: '请先注册并绑定个人 ID' })
   if (typeof eventId !== 'string' || !/^EVT-[A-Z0-9-]{3,30}$/.test(eventId)) return res.status(400).json({ error: '预测事件无效' })
@@ -1559,8 +1774,8 @@ app.post('/api/forecasts', async (req, res) => {
   res.status(existing ? 200 : 201).json({ forecast: item, balance: await loadVirtualPointsBalance(personalId) })
 })
 
-app.get('/api/etf-orders', async (req, res) => {
-  const personalId = String(req.query.personalId || '')
+app.get('/api/etf-orders', requireMember, async (req, res) => {
+  const personalId = req.member.personalId
   if (!validPersonalId(personalId)) return res.status(400).json({ error: '请先注册并绑定个人 ID' })
   const stored = await loadPlatformOrders(personalId)
   const ordersById = new Map((stored || []).filter(row => row.kind === 'etfOrders').map(row => [row.item.id, row.item]))
@@ -1569,10 +1784,11 @@ app.get('/api/etf-orders', async (req, res) => {
   res.json({ personalId, balance: await loadEtfDemoBalance(personalId, stored), orders: orders.slice(0, 30) })
 })
 
-app.post('/api/etf-orders', async (req, res) => {
+app.post('/api/etf-orders', requireMember, async (req, res) => {
   if (!frontendConfig.showEquityContracts) return res.status(403).json({ error: '后台已关闭合约 ETF 模块' })
   if (!frontendConfig.demoOrdersEnabled) return res.status(403).json({ error: '后台已暂停模拟下单' })
-  const { personalId, symbol, side, orderType = 'market' } = req.body || {}
+  const { symbol, side, orderType = 'market' } = req.body || {}
+  const personalId = req.member.personalId
   const quantity = Number(req.body?.quantity)
   const leverage = Number(req.body?.leverage ?? 1)
   if (!validPersonalId(personalId)) return res.status(400).json({ error: '请先注册并绑定个人 ID' })
@@ -1605,9 +1821,10 @@ app.post('/api/etf-orders', async (req, res) => {
   res.status(201).json({ order: item, balance: await loadEtfDemoBalance(personalId) })
 })
 
-app.post('/api/time-contracts', async (req, res) => {
+app.post('/api/time-contracts', requireMember, async (req, res) => {
   if (!frontendConfig.showTimeContracts) return res.status(403).json({ error: '后台已关闭时间合约模块' })
-  const { personalId, projectId, direction, durationSeconds, stake } = req.body || {}
+  const { projectId, direction, durationSeconds, stake } = req.body || {}
+  const personalId = req.member.personalId
   if (!validPersonalId(personalId)) return res.status(400).json({ error: '请先注册并绑定个人 ID' })
   let project = projects.get(projectId) || syncedTimeContractProjects.get(projectId)
   if (!project && typeof projectId === 'string' && projectId.startsWith('TIME-X-')) {
@@ -1672,8 +1889,10 @@ app.post('/api/time-contracts', async (req, res) => {
   res.status(201).json({ contract: publicPrediction(item), balance: await loadVirtualPointsBalance(personalId) })
 })
 
-app.post('/api/kyc-submissions', (req, res) => {
-  const { personalId, email, legalName, country, birthDate, documentType, documentNumber, documents } = req.body || {}
+app.post('/api/kyc-submissions', requireMember, async (req, res) => {
+  const personalId = req.member.personalId
+  const email = req.member.email || (!process.env.VERCEL && req.body?.email) || ''
+  const { legalName, country, birthDate, documentType, documentNumber, documents } = req.body || {}
   const required = [personalId, email, legalName, country, birthDate, documentType, documentNumber]
   if (required.some(value => typeof value !== 'string' || !value.trim())) {
     return res.status(400).json({ error: '请完整填写 KYC 资料' })
@@ -1692,35 +1911,85 @@ app.post('/api/kyc-submissions', (req, res) => {
     documents: { front: fileMetadata[0].name, back: fileMetadata[1].name },
     status: 'pending', reason: '', submittedAt: new Date().toISOString(), reviewedAt: null,
   }
+  if (platformDatabaseConfig()) {
+    try {
+      const rows = await platformDatabaseRequest('platform_kyc_submissions', '', {
+        method: 'POST',
+        body: {
+          id: item.id, personal_id: item.personalId, email: item.email, legal_name: item.legalName,
+          country: item.country, birth_date: item.birthDate, document_type: item.documentType,
+          document_last4: item.documentLast4, documents: item.documents, status: item.status,
+          reason: item.reason, submitted_at: item.submittedAt,
+        },
+        prefer: 'return=representation',
+      })
+      const saved = rows?.[0] ? kycSubmissionFromRow(rows[0]) : item
+      await platformDatabaseRequest('platform_members', `?personal_id=eq.${encodeURIComponent(personalId)}`, {
+        method: 'PATCH', body: { kyc_status: 'pending' }, prefer: 'return=minimal',
+      })
+      submissions.set(saved.id, saved)
+      return res.status(201).json({ id: saved.id, personalId: saved.personalId, status: saved.status, submittedAt: saved.submittedAt })
+    } catch (error) {
+      console.error('Unable to persist KYC application', error)
+      return res.status(503).json({ error: 'KYC 申请暂未保存，请稍后重试' })
+    }
+  }
   submissions.set(item.id, item)
   while (submissions.size > 500) submissions.delete(submissions.keys().next().value)
   res.status(201).json({ id: item.id, personalId: item.personalId, status: item.status, submittedAt: item.submittedAt })
 })
 
-app.get('/api/kyc-status', (req, res) => {
-  const personalId = String(req.query.personalId || '')
+app.get('/api/kyc-status', requireMember, async (req, res) => {
+  const personalId = req.member.personalId
+  if (platformDatabaseConfig()) {
+    try {
+      const rows = await platformDatabaseRequest('platform_kyc_submissions', `?select=*&personal_id=eq.${encodeURIComponent(personalId)}&order=submitted_at.desc&limit=1`)
+      const item = rows?.[0] ? kycSubmissionFromRow(rows[0]) : null
+      const status = item?.status || (req.member.kycStatus === 'verified' ? 'approved' : req.member.kycStatus)
+      return res.json({ status: status || 'unverified', reason: item?.reason || '', submittedAt: item?.submittedAt || null })
+    } catch (error) {
+      console.error('Unable to load KYC status', error)
+      return res.status(503).json({ error: 'KYC 状态暂时无法读取' })
+    }
+  }
   const item = [...submissions.values()].filter(row => row.personalId === personalId).sort((a, b) => b.submittedAt.localeCompare(a.submittedAt))[0]
   if (!item) return res.json({ status: 'unverified' })
   res.json({ status: item.status, reason: item.reason, submittedAt: item.submittedAt })
 })
 
-app.get('/api/wallet', (req, res) => {
-  const personalId = String(req.query.personalId || '')
-  if (!validPersonalId(personalId)) return res.status(400).json({ error: '个人 ID 无效' })
-  const transactions = [...walletTransactions.values()].filter(row => row.personalId === personalId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-  const balances = Object.fromEntries(depositCurrencies.map(currency => [currency, walletBalances.get(walletBalanceKey(personalId, currency)) || 0]))
-  res.json({ personalId, balance: balances.USDT, balances, transactions: transactions.map(safeTransaction) })
+app.get('/api/wallet', requireMember, async (req, res) => {
+  try {
+    const personalId = req.member.personalId
+    const { transactions, balances } = await loadWalletSnapshot(personalId)
+    res.json({ personalId, balance: balances.USDT, balances, transactions: transactions.map(safeTransaction) })
+  } catch (error) {
+    console.error('Unable to load wallet records', error)
+    res.status(503).json({ error: '资金记录暂时无法读取，请稍后重试' })
+  }
 })
 
-app.post('/api/wallet/deposits', (req, res) => {
+app.post('/api/wallet/deposits', requireMember, async (req, res) => {
   if (!frontendConfig.showDeposit) return res.status(403).json({ error: '后台已关闭演示充值' })
   if (!verifyWalletRequest(req, res)) return
-  const { personalId, amount, network } = req.body
-  const currency = req.body.currency || 'USDT'
+  const personalId = req.member.personalId
+  const { amount, network } = req.body || {}
+  const currency = req.body?.currency || 'USDT'
   const value = Number(amount)
   const currencyConfig = frontendConfig.depositAssets[currency]
   if (!currencyConfig || !Number.isFinite(value) || value < currencyConfig.minimumAmount || value > 100000 || !currencyConfig.networks.some(item => item.network === network)) {
     return res.status(400).json({ error: '充值币种、金额或网络无效，请检查后台演示配置' })
+  }
+  if (platformDatabaseConfig()) {
+    try {
+      const result = await platformDatabaseRpc('apply_wallet_transaction', {
+        p_personal_id: personalId, p_type: 'deposit', p_amount: value, p_fee: 0, p_network: network, p_address: '',
+      })
+      const item = walletTransactionFromRow(result.transaction)
+      return res.status(201).json({ transaction: safeTransaction(item), balance: Number(result.balance), currency })
+    } catch (error) {
+      console.error('Unable to persist simulated deposit', error)
+      return res.status(503).json({ error: '模拟充值暂未记账，请稍后重试' })
+    }
   }
   const item = { id: randomUUID(), personalId, type: 'deposit', currency, amount: rounded(value), fee: 0, network, address: '', status: 'completed', reason: '', createdAt: new Date().toISOString(), reviewedAt: new Date().toISOString() }
   const balanceKey = walletBalanceKey(personalId, currency)
@@ -1729,10 +1998,11 @@ app.post('/api/wallet/deposits', (req, res) => {
   res.status(201).json({ transaction: safeTransaction(item), balance: walletBalances.get(balanceKey), currency })
 })
 
-app.post('/api/wallet/withdrawals', (req, res) => {
+app.post('/api/wallet/withdrawals', requireMember, async (req, res) => {
   if (!frontendConfig.showWithdrawal) return res.status(403).json({ error: '后台已关闭演示提现' })
   if (!verifyWalletRequest(req, res)) return
-  const { personalId, amount, network, address } = req.body
+  const personalId = req.member.personalId
+  const { amount, network, address } = req.body || {}
   const value = Number(amount)
   if (!Number.isFinite(value) || value < frontendConfig.minimumWithdrawal || value > 100000 || !frontendConfig.depositNetworks.includes(network)) {
     return res.status(400).json({ error: '提现金额或演示网络无效，请检查后台配置' })
@@ -1741,28 +2011,77 @@ app.post('/api/wallet/withdrawals', (req, res) => {
     return res.status(400).json({ error: '请输入有效的演示收款地址' })
   }
   const fee = frontendConfig.withdrawalFee
+  const snapshot = await loadWalletSnapshot(personalId)
+  const balance = snapshot.balances.USDT || 0
   const total = rounded(value + fee)
-  const balanceKey = walletBalanceKey(personalId)
-  const balance = walletBalances.get(balanceKey) || 0
   if (balance < total) return res.status(400).json({ error: 'USDT 可用余额不足（提现金额另计演示手续费）' })
+  if (platformDatabaseConfig()) {
+    try {
+      const result = await platformDatabaseRpc('apply_wallet_transaction', {
+        p_personal_id: personalId, p_type: 'withdrawal', p_amount: value, p_fee: fee,
+        p_network: network, p_address: address.trim(),
+      })
+      const item = walletTransactionFromRow(result.transaction)
+      return res.status(201).json({ transaction: safeTransaction(item), balance: Number(result.balance) })
+    } catch (error) {
+      console.error('Unable to persist simulated withdrawal', error)
+      return res.status(503).json({ error: '提现申请暂未保存，请稍后重试' })
+    }
+  }
+  const balanceKey = walletBalanceKey(personalId)
   const item = { id: randomUUID(), personalId, type: 'withdrawal', currency: 'USDT', amount: rounded(value), fee, network, address: address.trim(), status: 'pending', reason: '', createdAt: new Date().toISOString(), reviewedAt: null }
   walletBalances.set(balanceKey, rounded(balance - total))
   walletTransactions.set(item.id, item)
   res.status(201).json({ transaction: safeTransaction(item), balance: walletBalances.get(balanceKey) })
 })
 
-app.get('/api/admin/kyc-submissions', requirePermission('kyc'), (req, res) => {
+app.get('/api/admin/kyc-submissions', requirePermission('kyc'), async (req, res) => {
   const status = req.query.status
+  if (platformDatabaseConfig()) {
+    try {
+      const filter = status ? `&status=eq.${encodeURIComponent(String(status))}` : ''
+      const rows = await platformDatabaseRequest('platform_kyc_submissions', `?select=*&order=submitted_at.desc&limit=1000${filter}`)
+      return res.json({ submissions: (rows || []).map(kycSubmissionFromRow).map(safeSubmission) })
+    } catch (error) {
+      console.error('Unable to load KYC queue', error)
+      return res.status(503).json({ error: 'KYC 审核队列暂时无法读取' })
+    }
+  }
   const items = [...submissions.values()].filter(row => !status || row.status === status).sort((a, b) => b.submittedAt.localeCompare(a.submittedAt))
   res.json({ submissions: items.map(safeSubmission) })
 })
 
-app.get('/api/admin/wallet-transactions', requirePermission('wallet'), (_req, res) => {
-  const transactions = [...walletTransactions.values()].filter(item => item.currency === 'USDT' || item.type === 'withdrawal').sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-  res.json({ transactions: transactions.map(safeTransaction) })
+app.get('/api/admin/wallet-transactions', requirePermission('wallet'), async (_req, res) => {
+  try {
+    const stored = platformDatabaseConfig()
+      ? await platformDatabaseRequest('platform_wallet_transactions', '?select=*&order=created_at.desc&limit=1000')
+      : null
+    const transactions = stored
+      ? stored.map(walletTransactionFromRow)
+      : [...walletTransactions.values()].filter(item => item.currency === 'USDT' || item.type === 'withdrawal').sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    res.json({ transactions: transactions.map(safeTransaction) })
+  } catch (error) {
+    console.error('Unable to load wallet transactions', error)
+    res.status(503).json({ error: '资金流水暂时无法读取，请稍后重试' })
+  }
 })
 
-app.patch('/api/admin/wallet-transactions/:id', requirePermission('wallet'), (req, res) => {
+app.patch('/api/admin/wallet-transactions/:id', requirePermission('wallet'), async (req, res) => {
+  if (platformDatabaseConfig()) {
+    const { status, reason = '' } = req.body || {}
+    if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ error: '审核状态无效' })
+    if (status === 'rejected' && (typeof reason !== 'string' || !reason.trim() || reason.length > 300)) return res.status(400).json({ error: '驳回时请填写原因（最多 300 字）' })
+    try {
+      const result = await platformDatabaseRpc('review_wallet_withdrawal', {
+        p_transaction_id: req.params.id, p_status: status, p_reason: status === 'rejected' ? reason.trim() : '',
+      })
+      const item = walletTransactionFromRow(result.transaction)
+      return res.json({ transaction: safeTransaction(item), balance: Number(result.balance) })
+    } catch (error) {
+      console.error('Unable to review persisted withdrawal', error)
+      return res.status(409).json({ error: '该提现已处理或记录不可用，请刷新后重试' })
+    }
+  }
   const item = walletTransactions.get(req.params.id)
   if (!item) return res.status(404).json({ error: '未找到该资金流水' })
   if (item.type !== 'withdrawal' || item.status !== 'pending') return res.status(400).json({ error: '仅可审核待处理的提现申请' })
@@ -1781,7 +2100,27 @@ app.patch('/api/admin/wallet-transactions/:id', requirePermission('wallet'), (re
   res.json({ transaction: safeTransaction(item), balance: walletBalances.get(item.personalId) || 0 })
 })
 
-app.patch('/api/admin/kyc-submissions/:id', requirePermission('kyc'), (req, res) => {
+app.patch('/api/admin/kyc-submissions/:id', requirePermission('kyc'), async (req, res) => {
+  if (platformDatabaseConfig()) {
+    const { status, reason = '' } = req.body || {}
+    if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ error: '审核状态无效' })
+    if (status === 'rejected' && (typeof reason !== 'string' || !reason.trim() || reason.length > 300)) return res.status(400).json({ error: '驳回时请填写原因（最多 300 字）' })
+    try {
+      const rows = await platformDatabaseRequest('platform_kyc_submissions', `?id=eq.${encodeURIComponent(req.params.id)}&status=eq.pending`, {
+        method: 'PATCH', body: { status, reason: status === 'rejected' ? reason.trim() : '', reviewed_at: new Date().toISOString() },
+        prefer: 'return=representation',
+      })
+      if (!rows?.length) return res.status(409).json({ error: '该 KYC 申请已处理，请刷新审核列表' })
+      const item = kycSubmissionFromRow(rows[0])
+      await platformDatabaseRequest('platform_members', `?personal_id=eq.${encodeURIComponent(item.personalId)}`, {
+        method: 'PATCH', body: { kyc_status: status === 'approved' ? 'verified' : 'rejected' }, prefer: 'return=minimal',
+      })
+      return res.json({ submission: safeSubmission(item) })
+    } catch (error) {
+      console.error('Unable to persist KYC review', error)
+      return res.status(503).json({ error: 'KYC 审核结果暂未保存，请稍后重试' })
+    }
+  }
   const item = submissions.get(req.params.id)
   if (!item) return res.status(404).json({ error: '未找到该 KYC 申请' })
   const { status, reason = '' } = req.body || {}
@@ -1793,6 +2132,13 @@ app.patch('/api/admin/kyc-submissions/:id', requirePermission('kyc'), (req, res)
   item.reason = status === 'rejected' ? reason.trim() : ''
   item.reviewedAt = new Date().toISOString()
   res.json({ submission: safeSubmission(item) })
+})
+
+app.use((error, req, res, next) => {
+  if (res.headersSent) return next(error)
+  const status = Number.isInteger(error?.status) && error.status >= 400 && error.status < 600 ? error.status : 500
+  console.error('Unhandled API request error', error)
+  res.status(status).json({ error: status === 400 ? '请求格式无效，请检查提交内容' : '服务器暂时无法处理请求，请稍后重试' })
 })
 
 export default app

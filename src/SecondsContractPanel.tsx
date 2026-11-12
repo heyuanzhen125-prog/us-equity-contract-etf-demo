@@ -43,7 +43,8 @@ export default function SecondsContractPanel({ projects, personalId, onRegister,
   useVisiblePolling(async signal => {
     if (!personalId) return
     try {
-      const response = await fetch(`/api/time-contracts?personalId=${encodeURIComponent(personalId)}`, { signal })
+      const identityQuery = import.meta.env.DEV ? `?personalId=${encodeURIComponent(personalId)}` : ''
+      const response = await fetch(`/api/time-contracts${identityQuery}`, { signal })
       if (!response.ok) return
       const result = await response.json()
       setBalance(result.balance)
@@ -58,7 +59,7 @@ export default function SecondsContractPanel({ projects, personalId, onRegister,
     if (!selected) { notify('请先由后台添加 SIM 演示项目'); return }
     setBusy(true)
     try {
-      const response = await fetch('/api/time-contracts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ personalId, projectId: selected.id, direction, durationSeconds: duration, stake: Number(stake) }) })
+      const response = await fetch('/api/time-contracts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...(import.meta.env.DEV ? { personalId } : {}), projectId: selected.id, direction, durationSeconds: duration, stake: Number(stake) }) })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || '模拟合约提交失败')
       setBalance(result.balance)

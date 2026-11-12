@@ -60,7 +60,8 @@ export default function PredictionMarketPanel({ personalId, onRegister, notify, 
   useVisiblePolling(async signal => {
     if (!personalId) return
     try {
-      const response = await fetch(`/api/forecasts?personalId=${encodeURIComponent(personalId)}`, { signal })
+      const identityQuery = import.meta.env.DEV ? `?personalId=${encodeURIComponent(personalId)}` : ''
+      const response = await fetch(`/api/forecasts${identityQuery}`, { signal })
       const result = await readPredictionJson<{ forecasts?: Forecast[]; balance?: number }>(response, '个人预测记录')
       const rows: Forecast[] = result.forecasts || []
       setForecasts(rows)
@@ -84,7 +85,7 @@ export default function PredictionMarketPanel({ personalId, onRegister, notify, 
     if (saved && saved.status !== 'pending') { notify('该预测已结算，不能修改或重复投入'); return }
     setSaving(event.id)
     try {
-      const response = await fetch('/api/forecasts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ personalId, eventId: event.id, choice, probability: choice === 'YES' ? 75 : 25, rationale: notes[event.id] || '', stake: saved?.stake ?? stakes[event.id] ?? 100 }) })
+      const response = await fetch('/api/forecasts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...(import.meta.env.DEV ? { personalId } : {}), eventId: event.id, choice, probability: choice === 'YES' ? 75 : 25, rationale: notes[event.id] || '', stake: saved?.stake ?? stakes[event.id] ?? 100 }) })
       const result = await readPredictionJson<{ forecast: Forecast; balance: number }>(response, '保存事件预测')
       setForecasts(current => [result.forecast, ...current.filter(row => row.eventId !== event.id)])
       setChoices(current => ({ ...current, [event.id]: result.forecast.choice || choice }))

@@ -33,7 +33,6 @@ const assets: Asset[] = [
 ]
 const tabs = ['全部', '热门', '科技', '指数', '行业 ETF', '加密概念']
 const fmt = (v: number) => v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-const createPersonalId = () => `NST-${Date.now().toString(36).slice(-4).toUpperCase()}${Math.random().toString(36).slice(2, 6).toUpperCase()}`
 type KycStatus = 'unverified' | 'pending' | 'verified' | 'rejected'
 type WorkspaceView = 'market' | 'equity-contract' | 'time-contract' | 'prediction' | 'positions' | 'account'
 type MarketIndex = { s: string; v: string; c: string; down?: boolean }
@@ -93,7 +92,8 @@ export default function App() {
   const [etfOrderBusy, setEtfOrderBusy] = useState(false)
   const [demoProjects, setDemoProjects] = useState<DemoProject[]>([])
   const [authOpen, setAuthOpen] = useState(false)
-  const [registeredEmail, setRegisteredEmail] = useState(() => localStorage.getItem('northstar.demo.registeredEmail') || '')
+  const [registeredEmail, setRegisteredEmail] = useState(() => import.meta.env.DEV ? localStorage.getItem('northstar.demo.registeredEmail') || '' : '')
+  const [authMode, setAuthMode] = useState<'signup' | 'login'>('signup')
   const [referralCode, setReferralCode] = useState(() => {
     const fromUrl = new URLSearchParams(window.location.search).get('ref')
     return (fromUrl || localStorage.getItem('northstar.demo.pendingReferral') || '').trim().toUpperCase()
@@ -103,26 +103,30 @@ export default function App() {
     else localStorage.removeItem('northstar.demo.pendingReferral')
   }, [referralCode])
   const [personalId, setPersonalId] = useState(() => {
-    const savedId = localStorage.getItem('northstar.demo.personalId')
-    if (savedId) return savedId
-    if (!localStorage.getItem('northstar.demo.registeredEmail')) return ''
-    const migratedId = createPersonalId()
-    localStorage.setItem('northstar.demo.personalId', migratedId)
-    return migratedId
+    return import.meta.env.DEV ? localStorage.getItem('northstar.demo.personalId') || '' : ''
   })
   useEffect(() => {
-    if (!registeredEmail || !personalId) return
     const controller = new AbortController()
-    void fetch('/api/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: registeredEmail, personalId, referralCode: '' }),
-      signal: controller.signal,
-    }).then(response => {
-      if (!response.ok && response.status !== 409) console.warn('Unable to sync existing demo account with the member directory')
-    }).catch(error => { if (!controller.signal.aborted) console.warn('Unable to sync existing demo account with the member directory', error) })
+    const accountQuery = import.meta.env.DEV ? `?${new URLSearchParams({ personalId: localStorage.getItem('northstar.demo.personalId') || '', email: localStorage.getItem('northstar.demo.registeredEmail') || '' })}` : ''
+    void fetch(`/api/account${accountQuery}`, { signal: controller.signal }).then(async response => {
+      if (!response.ok) {
+        localStorage.removeItem('northstar.demo.registeredEmail')
+        localStorage.removeItem('northstar.demo.personalId')
+        setRegisteredEmail('')
+        setPersonalId('')
+        return
+      }
+      const result = await response.json()
+      const account = result.account
+      if (!account?.email || !account?.personalId) return
+      localStorage.setItem('northstar.demo.registeredEmail', account.email)
+      localStorage.setItem('northstar.demo.personalId', account.personalId)
+      setRegisteredEmail(account.email)
+      setPersonalId(account.personalId)
+      setKycStatus(account.kycStatus === 'verified' ? 'verified' : account.kycStatus === 'pending' ? 'pending' : account.kycStatus === 'rejected' ? 'rejected' : 'unverified')
+    }).catch(error => { if (!controller.signal.aborted) console.warn('Unable to restore account session', error) })
     return () => controller.abort()
-  }, [registeredEmail, personalId])
+  }, [])
   const [inviteCount, setInviteCount] = useState(0)
   const personalInviteLink = useMemo(() => {
     if (!personalId) return ''
@@ -151,7 +155,8 @@ export default function App() {
   async function refreshWallet() {
     if (!personalId) return
     try {
-      const response = await fetch(`/api/wallet?personalId=${encodeURIComponent(personalId)}`)
+      const identityQuery = import.meta.env.DEV ? `?personalId=${encodeURIComponent(personalId)}` : ''
+      const response = await fetch(`/api/wallet${identityQuery}`)
       if (!response.ok) return
       const result = await response.json()
       setWalletBalance(result.balance || 0)
@@ -162,7 +167,8 @@ export default function App() {
     if (!personalId) return
     setLedgerBusy(true)
     const read = async (path: string) => {
-      const response = await fetch(`${path}${path.includes('?') ? '&' : '?'}personalId=${encodeURIComponent(personalId)}`)
+      const identityQuery = import.meta.env.DEV ? `${path.includes('?') ? '&' : '?'}personalId=${encodeURIComponent(personalId)}` : ''
+      const response = await fetch(`${path}${identityQuery}`)
       return response.ok ? response.json() : null
     }
     try {
@@ -182,7 +188,8 @@ export default function App() {
   useVisiblePolling(async signal => {
     if (!personalId) return
     try {
-      const response = await fetch(`/api/kyc-status?personalId=${encodeURIComponent(personalId)}`, { signal })
+      const identityQuery = import.meta.env.DEV ? `?personalId=${encodeURIComponent(personalId)}` : ''
+      const response = await fetch(`/api/kyc-status${identityQuery}`, { signal })
       if (!response.ok) return
       const result = await response.json()
       const status: KycStatus = result.status === 'approved' ? 'verified' : result.status === 'rejected' ? 'rejected' : result.status === 'pending' ? 'pending' : 'unverified'
@@ -201,7 +208,8 @@ export default function App() {
   useVisiblePolling(async signal => {
     if (!personalId) return
     try {
-      const response = await fetch(`/api/etf-orders?personalId=${encodeURIComponent(personalId)}`, { signal })
+      const identityQuery = import.meta.env.DEV ? `?personalId=${encodeURIComponent(personalId)}` : ''
+      const response = await fetch(`/api/etf-orders${identityQuery}`, { signal })
       if (!response.ok) return
       const result = await response.json()
       setEtfOrders(result.orders || [])
@@ -275,7 +283,7 @@ export default function App() {
       const response = await fetch('/api/etf-orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ personalId, symbol: selected.symbol, side: side === '买入' ? 'buy' : 'sell', orderType: price === '限价' ? 'limit' : 'market', quantity, leverage: Math.min(etfLeverage, frontConfig.maxEtfLeverage) }),
+        body: JSON.stringify({ ...(import.meta.env.DEV ? { personalId } : {}), symbol: selected.symbol, side: side === '买入' ? 'buy' : 'sell', orderType: price === '限价' ? 'limit' : 'market', quantity, leverage: Math.min(etfLeverage, frontConfig.maxEtfLeverage) }),
       })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || '模拟订单提交失败')
@@ -295,7 +303,7 @@ export default function App() {
     if (!Number.isFinite(amount) || amount <= 0) { notify('请输入大于 0 的 USDT 金额'); return }
     setWalletBusy(true)
     try {
-      const response = await fetch('/api/wallet/deposits', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ personalId, amount, network: depositNetwork }) })
+      const response = await fetch('/api/wallet/deposits', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...(import.meta.env.DEV ? { personalId } : {}), amount, network: depositNetwork }) })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || '充值请求失败')
       setWalletBalance(result.balance)
@@ -313,7 +321,7 @@ export default function App() {
     if (withdrawAddress.trim().length < 12) { notify('请输入有效的演示收款地址'); return }
     setWalletBusy(true)
     try {
-      const response = await fetch('/api/wallet/withdrawals', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ personalId, amount, network: depositNetwork, address: withdrawAddress.trim() }) })
+      const response = await fetch('/api/wallet/withdrawals', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...(import.meta.env.DEV ? { personalId } : {}), amount, network: depositNetwork, address: withdrawAddress.trim() }) })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || '提现申请失败')
       setWalletBalance(result.balance)
@@ -380,29 +388,38 @@ export default function App() {
       notify(error instanceof Error ? error.message : '后台服务暂不可用，请稍后再试')
     }
   }
-  const registerAccount = async (event: FormEvent<HTMLFormElement>) => {
+  const submitAccountAuth = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const email = new FormData(event.currentTarget).get('email')?.toString().trim().toLowerCase() || ''
-    if (authPassword !== authPasswordConfirm) { notify('两次输入的密码不一致'); return }
-    if (!acceptDemoTerms) { notify('请先确认模拟账户使用说明'); return }
-    const id = createPersonalId()
+    if (authMode === 'signup' && authPassword !== authPasswordConfirm) { notify('两次输入的密码不一致'); return }
+    if (authMode === 'signup' && !acceptDemoTerms) { notify('请先确认模拟账户使用说明'); return }
     try {
-      const response = await fetch('/api/register', {
+      const response = await fetch(authMode === 'signup' ? '/api/auth/signup' : '/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, personalId: id, referralCode }),
+        body: JSON.stringify({ email, password: authPassword, referralCode }),
       })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || '账户登记失败')
+      if (result.needsEmailConfirmation) {
+        setAuthMode('login')
+        setAuthPassword('')
+        setAuthPasswordConfirm('')
+        notify(result.message || '请先完成邮箱验证，然后登录账户')
+        return
+      }
+      const account = result.account
+      if (!account?.personalId || !account?.email) throw new Error('账户资料返回不完整，请重试')
+      localStorage.setItem('northstar.demo.registeredEmail', account.email)
+      localStorage.setItem('northstar.demo.personalId', account.personalId)
+      localStorage.removeItem('northstar.demo.pendingReferral')
+      setRegisteredEmail(account.email)
+      setPersonalId(account.personalId)
+      setKycStatus(account.kycStatus === 'verified' ? 'verified' : account.kycStatus === 'pending' ? 'pending' : account.kycStatus === 'rejected' ? 'rejected' : 'unverified')
     } catch (error) {
-      notify(error instanceof Error ? error.message : '账户登记服务暂不可用，请稍后重试')
+      notify(error instanceof Error ? error.message : '账户服务暂不可用，请稍后重试')
       return
     }
-    localStorage.setItem('northstar.demo.registeredEmail', email)
-    localStorage.setItem('northstar.demo.personalId', id)
-    localStorage.removeItem('northstar.demo.pendingReferral')
-    setRegisteredEmail(email)
-    setPersonalId(id)
     const continueToDeposit = authForDeposit
     setAuthForDeposit(false)
     setAuthOpen(false)
@@ -410,8 +427,23 @@ export default function App() {
     setAuthPasswordConfirm('')
     setAcceptDemoTerms(false)
     if (continueToDeposit) { setKycForDeposit(true); setKycOpen(true) }
-    notify(referralCode ? `账户已创建并记录邀请来源与个人 ID：${id}` : `账户已创建并绑定个人 ID：${id}`)
+    notify(authMode === 'signup' ? '账户已创建并绑定个人 ID' : '登录成功')
     if (referralCode) setReferralCode('')
+  }
+  const logoutAccount = async () => {
+    try { await fetch('/api/auth/logout', { method: 'POST' }) } catch { /* clear local profile even if the server is unavailable */ }
+    localStorage.removeItem('northstar.demo.registeredEmail')
+    localStorage.removeItem('northstar.demo.personalId')
+    setRegisteredEmail('')
+    setPersonalId('')
+    setKycStatus('unverified')
+    setKycReason('')
+    setWalletBalance(0)
+    setWalletTransactions([])
+    setEtfOrders([])
+    setTimeContractBills([])
+    setForecastBills([])
+    notify('已退出账户')
   }
   const kycStatusLabel = kycStatus === 'verified' ? '已认证' : kycStatus === 'pending' ? '审核中' : kycStatus === 'rejected' ? '需补充' : '未认证'
   const ledgerItems = useMemo<LedgerBill[]>(() => [
@@ -435,14 +467,14 @@ export default function App() {
       <div className="nav-label">{frontConfig.uiText.workspaceTitle}</div>
       <nav onClick={()=>setMobileNavOpen(false)}>{frontConfig.showMarketOverview&&<button className={`nav-item ${workspaceView==='market'?'active':''}`} title={frontConfig.uiText.navMarket} onClick={()=>setWorkspaceView('market')}><Compass size={17}/> {frontConfig.uiText.navMarket}</button>}{frontConfig.showEquityContracts&&<button className={`nav-item ${workspaceView==='equity-contract'?'active':''}`} title={frontConfig.uiText.navEquity} onClick={()=>setWorkspaceView('equity-contract')}><CandlestickChart size={17}/> {frontConfig.uiText.navEquity} <span className="nav-tag">Beta</span></button>}{frontConfig.showTimeContracts&&<button className={`nav-item ${workspaceView==='time-contract'?'active':''}`} title={frontConfig.uiText.navTime} onClick={()=>setWorkspaceView('time-contract')}><Clock3 size={17}/> {frontConfig.uiText.navTime}</button>}{frontConfig.showPrediction&&<button className={`nav-item ${workspaceView==='prediction'?'active':''}`} title={frontConfig.uiText.navPrediction} onClick={()=>setWorkspaceView('prediction')}><Activity size={17}/> {frontConfig.uiText.navPrediction}</button>}<button className={`nav-item ${workspaceView==='account'?'active':''}`} title="我的" onClick={()=>setWorkspaceView('account')}><UserRound size={17}/> 我的</button>{frontConfig.showWatchlistNav&&<button className="nav-item" title={frontConfig.uiText.navWatchlist}><Star size={17}/> {frontConfig.uiText.navWatchlist}</button>}{frontConfig.showPositionsNav&&<button className={`nav-item ${workspaceView==='positions'?'active':''}`} title={frontConfig.uiText.navPositions} onClick={()=>{setLedgerCategory('all');setWorkspaceView('positions')}}><Activity size={17}/> {frontConfig.uiText.navPositions}</button>}{frontConfig.showKyc&&<button className="nav-item" title={frontConfig.uiText.navKyc} onClick={openKyc}><Fingerprint size={17}/> {frontConfig.uiText.navKyc} <span className={`nav-tag ${kycStatus==='verified'?'kyc-ok':''}`}>{kycStatusLabel}</span></button>}</nav>
       {(frontConfig.showNewsNav||frontConfig.showCalendarNav)&&<><div className="nav-label market-label">{frontConfig.uiText.marketNavTitle}</div><nav onClick={()=>setMobileNavOpen(false)}>{frontConfig.showNewsNav&&<button className="nav-item" title={frontConfig.uiText.navNews}><BookOpen size={17}/> {frontConfig.uiText.navNews}</button>}{frontConfig.showCalendarNav&&<button className="nav-item" title={frontConfig.uiText.navCalendar}><Clock3 size={17}/> {frontConfig.uiText.navCalendar}</button>}</nav></>}
-      <div className="sidebar-bottom"><div className="promo"><div className="promo-icon"><ShieldCheck size={17}/></div><b>{frontConfig.uiText.riskTitle}</b><p>{frontConfig.uiText.riskText}</p><button onClick={() => notify(frontConfig.orderDisclaimer)}>{frontConfig.uiText.riskAction} <ArrowUpRight size={13}/></button></div>{frontConfig.showHelpNav&&<button className="nav-item" title={frontConfig.uiText.navHelp}><CircleHelp size={17}/> {frontConfig.uiText.navHelp}</button>}{frontConfig.showSettingsNav&&<button className="nav-item" title={frontConfig.uiText.navSettings}><Settings2 size={17}/> {frontConfig.uiText.navSettings}</button>}<button className="profile" onClick={() => registeredEmail ? setWorkspaceView('account') : setAuthOpen(true)}><div className="avatar">{registeredEmail ? registeredEmail[0].toUpperCase() : '访'}</div><div><b>{registeredEmail || '访客账户'}</b><small>{registeredEmail ? `个人 ID ${personalId}` : '点击创建账户'}</small></div><MoreHorizontal size={18}/></button></div>
+      <div className="sidebar-bottom"><div className="promo"><div className="promo-icon"><ShieldCheck size={17}/></div><b>{frontConfig.uiText.riskTitle}</b><p>{frontConfig.uiText.riskText}</p><button onClick={() => notify(frontConfig.orderDisclaimer)}>{frontConfig.uiText.riskAction} <ArrowUpRight size={13}/></button></div>{frontConfig.showHelpNav&&<button className="nav-item" title={frontConfig.uiText.navHelp}><CircleHelp size={17}/> {frontConfig.uiText.navHelp}</button>}{frontConfig.showSettingsNav&&<button className="nav-item" title={frontConfig.uiText.navSettings}><Settings2 size={17}/> {frontConfig.uiText.navSettings}</button>}<button className="profile" onClick={() => registeredEmail ? setWorkspaceView('account') : setAuthOpen(true)}><div className="avatar">{registeredEmail ? registeredEmail[0].toUpperCase() : '访'}</div><div><b>{registeredEmail || '访客账户'}</b><small>{registeredEmail ? `个人 ID ${personalId}` : '点击登录或创建账户'}</small></div><MoreHorizontal size={18}/></button></div>
     </aside>
     <main className="main">
       <header className="topbar"><button className="mobile-menu" aria-label="打开导航菜单" onClick={()=>setMobileNavOpen(true)}><Menu size={19}/></button><div className="breadcrumbs">{frontConfig.siteName} <span>/</span> {workspaceView==='market'?frontConfig.homeTitle:workspaceView==='equity-contract'?frontConfig.equityContractTitle:workspaceView==='time-contract'?frontConfig.timeContractTitle:workspaceView==='prediction'?frontConfig.predictionTitle:workspaceView==='positions'?'持仓与订单':'我的'}</div><div className="top-actions"><div className="market-status"><i/> {frontConfig.uiText.tradingStatus} <span>·</span> 交易时段</div><button className="icon-button" aria-label="通知" onClick={() => notify('当前没有新通知')}><Bell size={17}/><i/></button><button className={registeredEmail?'register-trigger registered-trigger':'register-trigger'} onClick={() => registeredEmail ? setWorkspaceView('account') : setAuthOpen(true)}>{registeredEmail ? '我的账户' : frontConfig.uiText.registerAction}</button>{frontConfig.showDeposit&&<button className="deposit-trigger" onClick={openDeposit}><Coins size={15}/> {frontConfig.uiText.depositAction}</button>}{frontConfig.showWithdrawal&&<button className="withdrawal-trigger" onClick={openWithdrawal}><ArrowUpRight size={14}/> {frontConfig.uiText.withdrawalAction}</button>}<button className="wallet-button" onClick={() => setWorkspaceView('account')}><Wallet size={16}/> {frontConfig.uiText.netWorthAction} <b>${fmt(etfBalance)}</b></button></div></header>
       <div className="content"><div className="page-heading"><div><div className="eyebrow"><span className="live-dot"/> {workspaceView==='market'?marketDataMeta.connected?`市场数据 · ${marketDataMeta.provider} 行情`:'市场数据 · SIM 演示价格':workspaceView==='equity-contract'?'模拟交易 · 美股合约 ETF':workspaceView==='time-contract'?'交易所概率参考 · PTS 模拟':workspaceView==='prediction'?'二元事件同步 · PTS 模拟':workspaceView==='positions'?'订单与模拟持仓':'账户与资产'}</div><h1>{workspaceView==='market'?frontConfig.homeTitle:workspaceView==='equity-contract'?frontConfig.equityContractTitle:workspaceView==='time-contract'?frontConfig.timeContractTitle:workspaceView==='prediction'?frontConfig.predictionTitle:workspaceView==='positions'?'持仓与订单':'我的'}</h1><p className="subtitle">{workspaceView==='market'?frontConfig.marketSubtitle:workspaceView==='equity-contract'?frontConfig.equityContractSubtitle:workspaceView==='time-contract'?frontConfig.timeContractSubtitle:workspaceView==='prediction'?frontConfig.predictionSubtitle:workspaceView==='positions'?'汇总查看合约 ETF、时间合约与事件预测记录。':'查看个人资料、账户状态、模拟资产与近期记录。'}</p></div><div className="heading-right"><span className="date-label">{workspaceView==='time-contract'?'Kalshi / Polymarket 概率参考':workspaceView==='prediction'?'Kalshi / Polymarket 事件同步':workspaceView==='positions'?(personalId?'个人 ID 已绑定':'绑定个人 ID 后查看订单'):workspaceView==='account'?'个人 ID 绑定账户':workspaceView==='market'||workspaceView==='equity-contract'?marketDataMeta.message:`行情延迟 ${frontConfig.marketDelayMinutes} 分钟`}</span>{frontConfig.showKyc&&<button className="outline-button kyc-status-button" onClick={openKyc}><Fingerprint size={14}/> KYC · {kycStatusLabel}</button>}<button className="outline-button" onClick={() => notify(workspaceView==='time-contract'?'行情参考交易所短周期合约概率；订单使用 PTS 模拟。':workspaceView==='prediction'?'只展示 YES / NO 二元事件行情；下单与结算使用平台模拟积分。':workspaceView==='positions'?'持仓与订单为模拟记录，不代表实盘持仓。':'行情数据为原型模拟数据')}><Clock3 size={14}/>{workspaceView==='time-contract'?'概率变化 · PTS 模拟':workspaceView==='prediction'?'YES / NO · PTS 模拟':workspaceView==='account'||workspaceView==='positions'?'演示数据 · 非实盘':workspaceView==='market'||workspaceView==='equity-contract'?marketDataMeta.connected?`${marketDataMeta.provider} 行情 · 测试数据`:'SIM 演示价 · API 未配置':`${frontConfig.marketDelayMinutes} 分钟延时`}</button></div></div>
         {workspaceView==='positions'&&<section className="account-page"><section className="account-panel account-history-panel"><div className="account-panel-heading"><div><b>模拟持仓与订单</b><small>合约 ETF、时间合约和事件预测 · {visibleTradeItems.length} 条记录</small></div><button className="account-text-action" onClick={()=>void refreshLedger()} disabled={ledgerBusy}>{ledgerBusy?'刷新中…':'刷新记录'} <ArrowUpRight size={13}/></button></div><div className="ledger-tabs">{([['all','全部'],['etf','合约 ETF'],['time','时间合约'],['forecast','事件预测']] as [LedgerCategory,string][]).map(([key,label])=><button key={key} className={ledgerCategory===key?'active-ledger-tab':''} onClick={()=>setLedgerCategory(key)}>{label}</button>)}</div>{visibleTradeItems.length===0?<div className="account-empty">{!personalId?'注册并绑定个人 ID 后查看个人订单':ledgerBusy?'正在加载订单…':'当前分类暂无订单记录'}</div>:<div className="ledger-list">{visibleTradeItems.map(row=><article className="ledger-row" key={`${row.category}-${row.id}`}><div className="ledger-icon"><span>{row.category==='etf'?'ETF':row.category==='time'?'时':'测'}</span></div><div className="ledger-row-main"><b>{row.title}</b><small>{row.description}</small><time>{new Date(row.createdAt).toLocaleString('zh-CN')}</time></div><div className="ledger-row-values"><b className={row.amount>0?'positive':row.amount<0?'negative':''}>{row.amount>0?'+':''}{fmt(row.amount)} <small>{row.currency}</small></b>{row.profit!==null&&row.profit!==undefined&&<span className={row.profit>=0?'positive':'negative'}>盈亏 {row.profit>0?'+':''}{fmt(row.profit)} {row.currency==='USD'?'USD':'PTS'}</span>}<em className={row.status.includes('审核')||row.status.includes('进行')||row.status.includes('待结算')?'pending':row.status.includes('驳回')||row.status.includes('判输')?'failed':'settled'}>{row.status}</em></div></article>)}</div>}</section></section>}
         {workspaceView==='account'&&<section className="account-page">
-          <div className="account-profile-card"><div className="account-avatar"><UserRound size={22}/></div><div className="account-identity"><small>个人账户</small><b>{registeredEmail||'游客账户'}</b><span>{registeredEmail?`个人 ID：${personalId}`:'注册后生成并绑定个人 ID'}</span></div><span className={`account-kyc-badge ${kycStatus}`}>{kycStatusLabel}</span></div>
+          <div className="account-profile-card"><div className="account-avatar"><UserRound size={22}/></div><div className="account-identity"><small>个人账户</small><b>{registeredEmail||'游客账户'}</b><span>{registeredEmail?`个人 ID：${personalId}`:'登录后加载绑定的个人 ID'}</span></div><span className={`account-kyc-badge ${kycStatus}`}>{kycStatusLabel}</span>{registeredEmail?<button className="account-text-action" onClick={()=>void logoutAccount()}>退出登录</button>:<button className="account-text-action" onClick={()=>{setAuthMode('login');setAuthOpen(true)}}>登录</button>}</div>
           {!registeredEmail&&<div className="account-register-prompt"><div><b>注册以保存账户信息</b><small>创建演示账户后，可查看绑定的个人 ID 和本机演示记录。</small></div><button onClick={()=>setAuthOpen(true)}><LogIn size={15}/> 注册账户</button></div>}
           <div className="account-stat-grid"><article><span>USDT 演示余额</span><b>{fmt(walletBalance)} <small>USDT</small></b><button onClick={openDeposit}>充值 / 提现 <ArrowUpRight size={13}/></button></article><article><span>模拟账户净值</span><b>{fmt(etfBalance)} <small>USD</small></b><button onClick={()=>setWorkspaceView('equity-contract')}>查看合约 ETF <ArrowUpRight size={13}/></button></article><article><span>模拟订单</span><b>{etfOrders.length} <small>笔</small></b><button onClick={()=>setWorkspaceView('equity-contract')}>查看订单记录 <ArrowUpRight size={13}/></button></article></div>
           <div className="account-content-grid"><section className="account-panel"><div className="account-panel-heading"><div><b>账户信息</b><small>身份与安全状态</small></div></div><div className="account-info-row"><span>注册邮箱</span><b>{registeredEmail||'尚未注册'}</b></div><div className="account-info-row"><span>个人 ID</span><b className="account-id-value">{personalId||'注册后生成'}{personalId&&<button aria-label="复制个人 ID" onClick={async()=>{try{await navigator.clipboard.writeText(personalId);notify('个人 ID 已复制')}catch{notify(`个人 ID：${personalId}`)}}}><Copy size={13}/></button>}</b></div><div className="account-info-row"><span>KYC 认证</span><button className="account-inline-action" onClick={openKyc}>{kycStatusLabel} · 管理认证 <ArrowUpRight size={12}/></button></div><div className="account-info-row"><span>账户类型</span><b>本地演示账户</b></div></section>
@@ -485,6 +517,6 @@ export default function App() {
         </>}{workspaceView==='time-contract'&&frontConfig.showTimeContracts&&<SecondsContractPanel projects={demoProjects} personalId={personalId} onRegister={()=>setAuthOpen(true)} notify={notify} durations={frontConfig.contractDurations} payoutPercent={frontConfig.contractPayoutPercent} autoPayoutEnabled={frontConfig.autoPayoutEnabled} title={frontConfig.timeContractTitle} subtitle={frontConfig.timeContractSubtitle}/ >}{workspaceView==='prediction'&&<PredictionMarketPanel personalId={personalId} onRegister={()=>setAuthOpen(true)} notify={notify} events={forecastEvents} title={frontConfig.predictionTitle} subtitle={frontConfig.predictionSubtitle}/>}
         <footer><span>© 2026 {frontConfig.siteName} · 产品原型</span><span><Eye size={13}/> 模拟行情与交易所参考行情会分别标注；PTS 不具备现金价值</span><a className="admin-entry" href={ADMIN_LINK_HREF}>后台系统</a><button onClick={()=>notify(frontConfig.orderDisclaimer)}>{frontConfig.uiText.riskDisclosure}</button></footer>
       </div>
-    </main>{kycOpen&&<KycModal personalId={personalId} email={registeredEmail} status={kycStatus} reason={kycReason} onClose={()=>{setKycOpen(false);setKycForDeposit(false)}} onSubmit={submitKyc}/ >}{authOpen&&<div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget){setAuthOpen(false);setAuthForDeposit(false)}}}><section className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="register-title"><div className="auth-top"><div className="auth-brand"><div className="brand-mark"><CandlestickChart size={18}/></div><span>{frontConfig.siteName}</span><span className="brand-dot">.</span></div><button className="icon-button" aria-label="关闭" onClick={()=>{setAuthOpen(false);setAuthForDeposit(false)}}><X size={18}/></button></div><div className="auth-intro"><div className="auth-icon"><ShieldCheck size={19}/></div><h2 id="register-title">创建账户</h2><p>注册 Northstar，开启模拟交易体验</p></div><form className="auth-form" onSubmit={registerAccount}><label htmlFor="register-email">邮箱地址</label><input id="register-email" name="email" type="email" autoComplete="email" placeholder="name@example.com" required/><label htmlFor="register-password">设置密码</label><div className="password-input"><input id="register-password" type={showAuthPassword?'text':'password'} autoComplete="new-password" minLength={8} maxLength={64} placeholder="至少 8 位字符" value={authPassword} onChange={e=>setAuthPassword(e.target.value)} required/><button type="button" aria-label={showAuthPassword?'隐藏密码':'显示密码'} onClick={()=>setShowAuthPassword(show=>!show)}><Eye size={15}/></button></div><label htmlFor="register-confirm">确认密码</label><input id="register-confirm" type={showAuthPassword?'text':'password'} autoComplete="new-password" minLength={8} maxLength={64} placeholder="再次输入密码" value={authPasswordConfirm} onChange={e=>setAuthPasswordConfirm(e.target.value)} required/><label className="terms-check"><input type="checkbox" checked={acceptDemoTerms} onChange={e=>setAcceptDemoTerms(e.target.checked)}/><span>我已了解这是本地模拟账户，不含真实交易或资金服务。</span></label><button className="register-submit" type="submit">创建演示账户</button></form><div className="auth-security"><ShieldCheck size={13}/> 密码仅用于本次表单校验，不会发送或保存</div><p className="auth-note">该注册流程只在当前浏览器保存邮箱和个人 ID，不会创建真实交易账户。</p></section></div>}{depositOpen&&<div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setDepositOpen(false)}}><section className="deposit-modal" role="dialog" aria-modal="true" aria-labelledby="deposit-title"><div className="deposit-modal-head"><div className="deposit-heading-icon"><Coins size={19}/></div><div><h2 id="deposit-title">USDT 资金</h2><p>充值、提现与资金记录</p></div><button className="icon-button" aria-label="关闭" onClick={()=>setDepositOpen(false)}><X size={18}/></button></div><div className="deposit-balance"><span>演示账户 USDT 余额</span><b>{fmt(walletBalance)} <small>USDT</small></b></div><div className="deposit-personal-id"><span>资金账户 · 已绑定个人 ID</span><b>{personalId}</b><small>充值和提现流水都关联此 ID</small></div><div className="wallet-mode-tabs">{frontConfig.showDeposit&&<button className={walletTab==='deposit'?'wallet-mode-active':''} onClick={()=>setWalletTab('deposit')}>充值 USDT</button>}{frontConfig.showWithdrawal&&<button className={walletTab==='withdrawal'?'wallet-mode-active':''} onClick={()=>setWalletTab('withdrawal')}>提现 USDT</button>}</div><div className="deposit-warning"><TriangleAlert size={17}/><span><b>本地演示资金功能</b> · 不会广播链上交易。请勿使用真实钱包地址或转入真实资产。</span></div><label className="deposit-label">选择网络</label><div className="network-options">{frontConfig.depositNetworks.map(network=><button key={network} className={depositNetwork===network?'network-option selected-network':'network-option'} onClick={()=>setDepositNetwork(network)}><span className={`network-dot ${network.toLowerCase()}`}/>{network}{depositNetwork===network&&<span className="network-check">✓</span>}</button>)}</div><label className="deposit-label" htmlFor="deposit-amount">{walletTab==='deposit'?'充值金额':'提现金额'}</label><div className="deposit-amount-wrap"><input id="deposit-amount" type="number" min={walletTab==='deposit'?'1':String(frontConfig.minimumWithdrawal)} step="0.01" value={depositAmount} onChange={e=>setDepositAmount(e.target.value)} placeholder={walletTab==='deposit'?'输入充值金额':`最低提现 ${frontConfig.minimumWithdrawal} USDT`}/><span>USDT</span></div><div className="amount-presets">{[100,500,1000].map(amount=><button key={amount} onClick={()=>setDepositAmount(String(amount))}>{amount} USDT</button>)}</div>{walletTab==='deposit'?<div className="demo-address"><div><span>演示充值网络 · {depositNetwork}</span><b>到账仅记录于本地模拟钱包</b></div><span className="demo-badge">无链上地址</span></div>:<label className="deposit-label" htmlFor="withdraw-address">收款地址（演示）<div className="withdraw-address-wrap"><input id="withdraw-address" value={withdrawAddress} onChange={e=>setWithdrawAddress(e.target.value)} placeholder="仅输入虚构测试地址" autoComplete="off"/></div></label>}<div className="deposit-summary"><span>{walletTab==='deposit'?'预计到账':`预计扣除（含 ${frontConfig.withdrawalFee.toFixed(2)} USDT 手续费）`}</span><b>{Number(depositAmount)>0?fmt(Number(depositAmount)+(walletTab==='withdrawal'?frontConfig.withdrawalFee:0)):'0.00'} USDT</b><small>{walletTab==='deposit'?'模拟充值即时记账':'提现申请提交后由后台审核，驳回时退回模拟余额'}</small></div><button className="simulate-deposit" disabled={walletBusy} onClick={walletTab==='deposit'?simulateDeposit:requestWithdrawal}>{walletBusy?'处理中…':walletTab==='deposit'?'模拟充值到账':'提交提现申请'}</button>{walletTransactions.length>0&&<div className="deposit-history"><div className="history-title">资金流水</div>{walletTransactions.slice(0,5).map(row=><div className="history-row" key={row.id}><span><b className={row.type==='deposit'?'':'withdrawal-amount'}>{row.type==='deposit'?'+':'−'}{fmt(row.amount)} USDT</b><small>{row.type==='deposit'?'充值':'提现'} · {row.network} · {row.addressMasked||row.personalId}</small></span><em className={row.status==='rejected'?'rejected-history':''}>{row.status==='completed'?'已完成':row.status==='pending'?'待后台审核':'已驳回'}</em></div>)}</div>}<div className="deposit-footnote"><ShieldCheck size={13}/> 正式充值需要接入合规的钱包与链上确认服务</div></section></div>}{toast&&<div className="toast"><CreditCard size={16}/>{toast}<button onClick={()=>setToast('')}><X size={14}/></button></div>}
+    </main>{kycOpen&&<KycModal personalId={personalId} email={registeredEmail} status={kycStatus} reason={kycReason} onClose={()=>{setKycOpen(false);setKycForDeposit(false)}} onSubmit={submitKyc}/ >}{authOpen&&<div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget){setAuthOpen(false);setAuthForDeposit(false)}}}><section className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="register-title"><div className="auth-top"><div className="auth-brand"><div className="brand-mark"><CandlestickChart size={18}/></div><span>{frontConfig.siteName}</span><span className="brand-dot">.</span></div><button className="icon-button" aria-label="关闭" onClick={()=>{setAuthOpen(false);setAuthForDeposit(false)}}><X size={18}/></button></div><div className="auth-intro"><div className="auth-icon"><ShieldCheck size={19}/></div><h2 id="register-title">{authMode === "signup" ? "创建账户" : "登录账户"}</h2><p>{authMode === "signup" ? "创建 Northstar 演示账户" : "登录后读取你的成员资料与交易记录"}</p></div><form className="auth-form" onSubmit={submitAccountAuth}><label htmlFor="register-email">邮箱地址</label><input id="register-email" name="email" type="email" autoComplete="email" placeholder="name@example.com" required/><label htmlFor="register-password">设置密码</label><div className="password-input"><input id="register-password" type={showAuthPassword?'text':'password'} autoComplete="new-password" minLength={8} maxLength={64} placeholder="至少 8 位字符" value={authPassword} onChange={e=>setAuthPassword(e.target.value)} required/><button type="button" aria-label={showAuthPassword?'隐藏密码':'显示密码'} onClick={()=>setShowAuthPassword(show=>!show)}><Eye size={15}/></button></div>{authMode === "signup" && <><label htmlFor="register-confirm">确认密码</label><input id="register-confirm" type={showAuthPassword?'text':'password'} autoComplete="new-password" minLength={8} maxLength={64} placeholder="再次输入密码" value={authPasswordConfirm} onChange={e=>setAuthPasswordConfirm(e.target.value)} required/></>}{authMode === "signup" && <label className="terms-check"><input type="checkbox" checked={acceptDemoTerms} onChange={e=>setAcceptDemoTerms(e.target.checked)}/><span>我已了解这是本地模拟账户，不含真实交易或资金服务。</span></label>}<button className="register-submit" type="submit">{authMode === "signup" ? "创建演示账户" : "登录"}</button></form><div className="auth-security"><ShieldCheck size={13}/> 密码通过安全账户服务处理，不保存在本平台应用日志中</div><p className="auth-note">账户凭据由 Supabase Auth 管理，订单和资金接口由登录会话绑定个人 ID。交易和资金仍为演示数据。</p><button type="button" className="account-text-action" onClick={() => {setAuthMode(authMode === "signup" ? "login" : "signup");setAuthPassword('');setAuthPasswordConfirm('')}}>{authMode === "signup" ? "已有账户？登录" : "没有账户？创建账户"}</button></section></div>}{depositOpen&&<div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setDepositOpen(false)}}><section className="deposit-modal" role="dialog" aria-modal="true" aria-labelledby="deposit-title"><div className="deposit-modal-head"><div className="deposit-heading-icon"><Coins size={19}/></div><div><h2 id="deposit-title">USDT 资金</h2><p>充值、提现与资金记录</p></div><button className="icon-button" aria-label="关闭" onClick={()=>setDepositOpen(false)}><X size={18}/></button></div><div className="deposit-balance"><span>演示账户 USDT 余额</span><b>{fmt(walletBalance)} <small>USDT</small></b></div><div className="deposit-personal-id"><span>资金账户 · 已绑定个人 ID</span><b>{personalId}</b><small>充值和提现流水都关联此 ID</small></div><div className="wallet-mode-tabs">{frontConfig.showDeposit&&<button className={walletTab==='deposit'?'wallet-mode-active':''} onClick={()=>setWalletTab('deposit')}>充值 USDT</button>}{frontConfig.showWithdrawal&&<button className={walletTab==='withdrawal'?'wallet-mode-active':''} onClick={()=>setWalletTab('withdrawal')}>提现 USDT</button>}</div><div className="deposit-warning"><TriangleAlert size={17}/><span><b>本地演示资金功能</b> · 不会广播链上交易。请勿使用真实钱包地址或转入真实资产。</span></div><label className="deposit-label">选择网络</label><div className="network-options">{frontConfig.depositNetworks.map(network=><button key={network} className={depositNetwork===network?'network-option selected-network':'network-option'} onClick={()=>setDepositNetwork(network)}><span className={`network-dot ${network.toLowerCase()}`}/>{network}{depositNetwork===network&&<span className="network-check">✓</span>}</button>)}</div><label className="deposit-label" htmlFor="deposit-amount">{walletTab==='deposit'?'充值金额':'提现金额'}</label><div className="deposit-amount-wrap"><input id="deposit-amount" type="number" min={walletTab==='deposit'?'1':String(frontConfig.minimumWithdrawal)} step="0.01" value={depositAmount} onChange={e=>setDepositAmount(e.target.value)} placeholder={walletTab==='deposit'?'输入充值金额':`最低提现 ${frontConfig.minimumWithdrawal} USDT`}/><span>USDT</span></div><div className="amount-presets">{[100,500,1000].map(amount=><button key={amount} onClick={()=>setDepositAmount(String(amount))}>{amount} USDT</button>)}</div>{walletTab==='deposit'?<div className="demo-address"><div><span>演示充值网络 · {depositNetwork}</span><b>到账仅记录于本地模拟钱包</b></div><span className="demo-badge">无链上地址</span></div>:<label className="deposit-label" htmlFor="withdraw-address">收款地址（演示）<div className="withdraw-address-wrap"><input id="withdraw-address" value={withdrawAddress} onChange={e=>setWithdrawAddress(e.target.value)} placeholder="仅输入虚构测试地址" autoComplete="off"/></div></label>}<div className="deposit-summary"><span>{walletTab==='deposit'?'预计到账':`预计扣除（含 ${frontConfig.withdrawalFee.toFixed(2)} USDT 手续费）`}</span><b>{Number(depositAmount)>0?fmt(Number(depositAmount)+(walletTab==='withdrawal'?frontConfig.withdrawalFee:0)):'0.00'} USDT</b><small>{walletTab==='deposit'?'模拟充值即时记账':'提现申请提交后由后台审核，驳回时退回模拟余额'}</small></div><button className="simulate-deposit" disabled={walletBusy} onClick={walletTab==='deposit'?simulateDeposit:requestWithdrawal}>{walletBusy?'处理中…':walletTab==='deposit'?'模拟充值到账':'提交提现申请'}</button>{walletTransactions.length>0&&<div className="deposit-history"><div className="history-title">资金流水</div>{walletTransactions.slice(0,5).map(row=><div className="history-row" key={row.id}><span><b className={row.type==='deposit'?'':'withdrawal-amount'}>{row.type==='deposit'?'+':'−'}{fmt(row.amount)} USDT</b><small>{row.type==='deposit'?'充值':'提现'} · {row.network} · {row.addressMasked||row.personalId}</small></span><em className={row.status==='rejected'?'rejected-history':''}>{row.status==='completed'?'已完成':row.status==='pending'?'待后台审核':'已驳回'}</em></div>)}</div>}<div className="deposit-footnote"><ShieldCheck size={13}/> 正式充值需要接入合规的钱包与链上确认服务</div></section></div>}{toast&&<div className="toast"><CreditCard size={16}/>{toast}<button onClick={()=>setToast('')}><X size={14}/></button></div>}
   </div>
 }

@@ -515,6 +515,13 @@ const frontendConfig = {
   demoOrdersEnabled: true,
   showMarketPicks: true,
   showDemoProjects: true,
+  showMarketStrip: true,
+  showContractCards: true,
+  showMarketTable: true,
+  showAssetChart: true,
+  showEtfOrderHistory: true,
+  showAccountSummary: true,
+  showAccountHistory: true,
   showQuickOrder: true,
   showWatchlistNav: true,
   showPositionsNav: true,
@@ -1377,7 +1384,7 @@ app.patch('/api/admin/front-config', requirePermission('front-config'), (req, re
   frontendConfig.marketAssets = input.marketAssets.map(asset => ({ ...asset, symbol: asset.symbol.toUpperCase(), name: asset.name.trim(), last: rounded(Number(asset.last)), change: Number(asset.change), spark: asset.spark.map(Number) }))
   marketQuotesCache.expiresAt = 0
   frontendConfig.marketIndices = input.marketIndices.map(index => ({ ...index, s: index.s.trim() }))
-  for (const field of ['showMarketOverview', 'showEquityContracts', 'showTimeContracts', 'showPrediction', 'showDeposit', 'showWithdrawal', 'showKyc', 'demoOrdersEnabled', 'showMarketPicks', 'showDemoProjects', 'showQuickOrder', 'showWatchlistNav', 'showPositionsNav', 'showNewsNav', 'showCalendarNav', 'showHelpNav', 'showSettingsNav', 'autoPayoutEnabled']) {
+  for (const field of ['showMarketOverview', 'showEquityContracts', 'showTimeContracts', 'showPrediction', 'showDeposit', 'showWithdrawal', 'showKyc', 'demoOrdersEnabled', 'showMarketPicks', 'showDemoProjects', 'showMarketStrip', 'showContractCards', 'showMarketTable', 'showAssetChart', 'showEtfOrderHistory', 'showAccountSummary', 'showAccountHistory', 'showQuickOrder', 'showWatchlistNav', 'showPositionsNav', 'showNewsNav', 'showCalendarNav', 'showHelpNav', 'showSettingsNav', 'autoPayoutEnabled']) {
     if (typeof input[field] !== 'boolean') return res.status(400).json({ error: `${field} 必须为开关` })
     frontendConfig[field] = input[field]
   }

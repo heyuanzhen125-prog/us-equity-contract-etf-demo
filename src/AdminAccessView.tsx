@@ -122,7 +122,7 @@ export default function AdminAccessView({ adminKey }: { adminKey: string }) {
 
   return <div className="admin-content access-view">
     <div className="admin-title-row"><div><div className="admin-eyebrow"><i/> 后台安全</div><h1>权限与账号</h1><p>配置后台角色栏目权限，并创建独立后台人员账号。</p></div><button className="access-refresh" onClick={() => void refresh()} disabled={busy}>刷新</button></div>
-    <div className="access-note"><ShieldCheck size={16}/><span>权限由服务端校验，不只是隐藏导航。后台账号、角色及演示数据当前保存在 API 进程内存，服务重启后会重置；生产使用前需配置持久化存储。</span></div>
+    <div className="access-note"><ShieldCheck size={16}/><span>权限由服务端校验，不只是隐藏导航。后台账号、角色及虚拟数据当前保存在 API 进程内存，服务重启后会重置；生产使用前需配置持久化存储。</span></div>
     <section className="access-panel">
       <header><div><h2>角色与栏目权限</h2><p>勾选该角色允许访问的后台栏目；超级管理员角色不可修改。</p></div><div className="access-new-role"><input value={newRoleName} onChange={event => setNewRoleName(event.target.value)} placeholder="新角色名称" maxLength={40}/><button onClick={createRole} disabled={!newRoleName.trim()}><Plus size={14}/>添加角色</button></div></header>
       <div className="access-roles">{roles.map(role => <article className="access-role" key={role.id}>

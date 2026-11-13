@@ -34,7 +34,7 @@ export default function AdminProjectsView({ adminKey }: { adminKey: string }) {
   const [drafts, setDrafts] = useState<Record<string, ProjectDraft>>({})
   const [pointDrafts, setPointDrafts] = useState<Record<string, number[]>>({})
   const [intervalDrafts, setIntervalDrafts] = useState<Record<string, number>>({})
-  const [form, setForm] = useState({ symbol: 'SIM-DEMO', name: '演示项目', startPrice: '100', targetChangePct: '3' })
+  const [form, setForm] = useState({ symbol: 'SIM-DEMO', name: '虚拟项目', startPrice: '100', targetChangePct: '3' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -177,17 +177,17 @@ export default function AdminProjectsView({ adminKey }: { adminKey: string }) {
 
   return <div className="admin-content project-admin-content">
     <div className="admin-title-row">
-      <div><div className="admin-eyebrow"><i/> 前台项目管理</div><h1>项目列表</h1><p>在这里新增、编辑、排序、上下架前台展示的模拟项目，无需改动页面代码。</p></div>
+      <div><div className="admin-eyebrow"><i/> 前台项目管理</div><h1>项目列表</h1><p>在这里新增、编辑、排序、上下架前台展示的虚拟项目，无需改动页面代码。</p></div>
       <button className="wallet-refresh" onClick={() => void refresh()} disabled={busy}><RefreshCw size={14} className={busy ? 'spinning' : ''}/> 刷新项目</button>
     </div>
-    <div className="project-safety"><Activity size={16}/><span><b>仅限 SIM 演示行情</b> · 保存后，前台价格会按下方设定点位依次运行；不会影响真实市场或订单结算。</span></div>
+    <div className="project-safety"><Activity size={16}/><span><b>SIM 价格曲线 · 仅用于界面展示</b> · 保存后，前台价格会按下方设定点位依次运行；不会影响真实市场或订单结算。</span></div>
     <div className="project-admin-grid">
       <form className="project-create-card" onSubmit={event => void createProject(event)}>
         <div className="project-card-title"><div><span>添加前台项目</span><small>发布后会出现在前台项目列表</small></div><span className="sim-chip">SIM ONLY</span></div>
         <label>项目代码<input value={form.symbol} onChange={event => setForm(current => ({ ...current, symbol: event.target.value.toUpperCase() }))} pattern="SIM-[A-Z0-9]{2,8}" title="代码必须以 SIM- 开头" required/></label>
-        <label>项目名称<input value={form.name} onChange={event => setForm(current => ({ ...current, name: event.target.value }))} placeholder="例如：AI 模拟指数" required maxLength={60}/></label>
+        <label>项目名称<input value={form.name} onChange={event => setForm(current => ({ ...current, name: event.target.value }))} placeholder="例如：AI 参考指数" required maxLength={60}/></label>
         <div className="project-form-pair">
-          <label>起始模拟价格<input type="number" min="0.01" max="1000000" step="0.01" value={form.startPrice} onChange={event => setForm(current => ({ ...current, startPrice: event.target.value }))} required/></label>
+          <label>起始价格<input type="number" min="0.01" max="1000000" step="0.01" value={form.startPrice} onChange={event => setForm(current => ({ ...current, startPrice: event.target.value }))} required/></label>
           <label>目标变化 %<input type="number" min="-20" max="20" step="0.1" value={form.targetChangePct} onChange={event => setForm(current => ({ ...current, targetChangePct: event.target.value }))} required/></label>
         </div>
         <button className="admin-primary project-create-button" disabled={busy}><Plus size={14}/> 添加项目</button>
@@ -218,10 +218,10 @@ export default function AdminProjectsView({ adminKey }: { adminKey: string }) {
                 <button className="sim-point-save" type="button" onClick={() => void savePoints(project)} disabled={busy}><Save size={13}/>应用点位并开始行情</button>
               </details>
               <div className="project-form-pair"><label>项目代码<input value={draft.symbol} pattern="SIM-[A-Z0-9]{2,8}" onChange={event => update({ symbol: event.target.value.toUpperCase() })}/></label><label>项目名称<input maxLength={60} value={draft.name} onChange={event => update({ name: event.target.value })}/></label></div>
-              <div className="project-form-pair"><label>起始模拟价格<input type="number" min="0.01" max="1000000" step="0.01" value={draft.startPrice} onChange={event => update({ startPrice: Number(event.target.value) })}/></label><label>目标变化 %<input type="number" min="-20" max="20" step="0.1" value={draft.targetChangePct} onChange={event => update({ targetChangePct: Number(event.target.value) })}/></label></div>
+              <div className="project-form-pair"><label>起始价格<input type="number" min="0.01" max="1000000" step="0.01" value={draft.startPrice} onChange={event => update({ startPrice: Number(event.target.value) })}/></label><label>目标变化 %<input type="number" min="-20" max="20" step="0.1" value={draft.targetChangePct} onChange={event => update({ targetChangePct: Number(event.target.value) })}/></label></div>
               <div className="project-form-pair"><label>前台排序（小号靠前）<input type="number" min="0" max="999" step="1" value={draft.sortOrder} onChange={event => update({ sortOrder: Number(event.target.value) })}/></label><label className="front-toggle project-visibility"><span>{draft.visible ? <><Eye size={13}/> 已上架</> : <><EyeOff size={13}/> 已下架</>}</span><input type="checkbox" checked={draft.visible} onChange={event => update({ visible: event.target.checked })}/></label></div>
               <div className="project-admin-actions"><button onClick={() => void saveProject(project)} disabled={busy}><Save size={13}/> 保存修改</button><button className="project-delete-button" onClick={() => void deleteProject(project)} disabled={busy}><Trash2 size={13}/> 删除项目</button></div>
-              <div className="project-disclosure">{project.targetChangePct >= 0 ? <TrendingUp size={12}/> : <TrendingDown size={12}/>} 前台只显示模拟行情，修改后自动同步</div>
+              <div className="project-disclosure">{project.targetChangePct >= 0 ? <TrendingUp size={12}/> : <TrendingDown size={12}/>} 前台只显示虚拟行情，修改后自动同步</div>
             </article>
           })}
         </div>}
@@ -229,6 +229,6 @@ export default function AdminProjectsView({ adminKey }: { adminKey: string }) {
     </div>
     {notice && <div className="project-notice">{notice}</div>}
     {error && <div className="admin-error project-error">{error}</div>}
-    <div className="admin-footnote"><Activity size={13}/> 行情只用于 SIM 演示；保存点位后价格依序变化，点位间线性过渡。订单结算仍使用独立模拟轨迹。</div>
+    <div className="admin-footnote"><Activity size={13}/> 价格曲线仅供界面展示；保存点位后价格依序变化，点位间线性过渡。订单结算仍使用独立虚拟轨迹。</div>
   </div>
 }

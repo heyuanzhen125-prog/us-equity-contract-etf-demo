@@ -222,11 +222,11 @@ export default function AdminPredictionPreviewView({ adminKey }: { adminKey: str
     <section className="outcome-control-grid">
       {renderControls('contracts', '前台时间合约', '控制现有未结算合约及后续新合约的最终输赢结果。')}
       {renderControls('forecasts', '前台事件预测', '预测记录使用虚拟积分投入；赢返还本金及事件收益，输扣除投入。')}
-      {renderControls('etfOrders', '前台合约 ETF 买卖单', '记录买入/卖出模拟订单并以虚拟美元余额结算输赢。')}
+      {renderControls('etfOrders', '前台合约 ETF 买卖单', '记录买入/卖出虚拟订单并以虚拟美元余额结算输赢。')}
     </section>
     <section className="admin-orders-panel">
       <div className="admin-orders-head">
-        <div><h2>前台订单</h2><span>{orders.length} 笔 · 只可对待处理模拟订单逐笔复核</span></div>
+        <div><h2>前台订单</h2><span>{orders.length} 笔 · 只可对待处理虚拟订单逐笔复核</span></div>
         <div className="admin-orders-filters">
           {([
             ['all', '全部'],

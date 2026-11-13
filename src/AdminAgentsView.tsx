@@ -111,7 +111,7 @@ export default function AdminAgentsView({ adminKey }: { adminKey: string }) {
 
   return <div className="admin-content access-view">
     <div className="admin-title-row"><div><div className="admin-eyebrow"><i/> 渠道运营</div><h1>代理系统</h1><p>维护代理账号、下级用户及返佣比例。</p></div><button className="access-refresh" onClick={() => void refresh()} disabled={busy}><RefreshCw size={13}/>刷新</button></div>
-    <div className="access-note access-warning"><Users size={16}/><span><b>佣金自动计算未启用：</b>当前没有接入真实入金数据源。下方比例仅为配置，不会根据演示充值计算佣金，也不会产生真实结算或提现。</span></div>
+    <div className="access-note access-warning"><Users size={16}/><span><b>佣金自动计算未启用：</b>当前没有接入真实入金数据源。下方比例仅为配置，不会根据虚拟充值计算佣金，也不会产生真实结算或提现。</span></div>
     <div className="agent-layout">
       <section className="access-panel agent-form-panel">
         <header><div><h2>{editingId ? '编辑代理' : '添加代理'}</h2><p>每个下级个人 ID 只能关联一个代理。</p></div></header>

@@ -73,6 +73,19 @@ async function platformDatabaseRpc(functionName, body) {
   return await platformDatabaseRequest(`rpc/${functionName}`, '', { method: 'POST', body })
 }
 
+function normalizeDisplayCopy(value) {
+  if (typeof value === 'string') {
+    return value.replace(new RegExp('\\u6a21\\u62df|\\u6f14\\u793a', 'g'), '虚拟')
+      .replaceAll('仅供虚拟', '此页面不处理真实资金')
+      .replaceAll('原型虚拟', '当前仅提供虚拟体验')
+      .replaceAll('虚拟积分虚拟', '虚拟积分')
+      .replaceAll('虚拟虚拟', '虚拟')
+  }
+  if (Array.isArray(value)) return value.map(normalizeDisplayCopy)
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, normalizeDisplayCopy(item)]))
+  return value
+}
+
 const persistentStateKey = {
   settings: 'frontend_config', events: 'forecast_events', projects: 'demo_projects',
   roles: 'permission_roles', staff: 'staff_users', agents: 'agents',
@@ -93,13 +106,13 @@ async function hydratePersistableState() {
   const rows = await platformDatabaseRequest('platform_app_state', '?select=state_key,value&limit=20')
   const state = new Map((rows || []).map(row => [row.state_key, row.value]))
   const settings = state.get(persistentStateKey.settings)
-  if (settings && typeof settings === 'object' && !Array.isArray(settings)) Object.assign(frontendConfig, settings)
+  if (settings && typeof settings === 'object' && !Array.isArray(settings)) Object.assign(frontendConfig, normalizeDisplayCopy(settings))
   const events = state.get(persistentStateKey.events)
-  if (Array.isArray(events)) forecastEvents.splice(0, forecastEvents.length, ...events)
+  if (Array.isArray(events)) forecastEvents.splice(0, forecastEvents.length, ...normalizeDisplayCopy(events))
   const storedProjects = state.get(persistentStateKey.projects)
   if (Array.isArray(storedProjects)) {
     projects.clear()
-    for (const project of storedProjects) if (project?.id) projects.set(project.id, project)
+    for (const project of storedProjects) if (project?.id) projects.set(project.id, normalizeDisplayCopy(project))
   }
   const storedRoles = state.get(persistentStateKey.roles)
   if (Array.isArray(storedRoles)) {
@@ -234,11 +247,11 @@ async function reserveDemoOrderOrRespond(res, kind, item, amount) {
     })
   } catch (error) {
     if (error.databaseMessage === 'INSUFFICIENT_DEMO_BALANCE') {
-      res.status(400).json({ error: kind === 'etfOrders' ? '虚拟美元余额不足' : '虚拟积分余额不足' })
+      res.status(400).json({ error: kind === 'etfOrders' ? '虚拟美元余额不足' : '账户积分余额不足' })
       return null
     }
     console.error('Unable to atomically reserve simulated order funds', error)
-    res.status(error.status === 409 ? 409 : 503).json({ error: '模拟订单未能安全写入余额账本，请刷新后重试' })
+    res.status(error.status === 409 ? 409 : 503).json({ error: '虚拟订单未能安全写入余额账本，请刷新后重试' })
     return null
   }
 }
@@ -467,7 +480,7 @@ const frontendConfig = {
   ],
   marketIndices: [{s:'S&P 500',v:'6,812.34',c:'+0.74%'},{s:'纳斯达克',v:'23,104.61',c:'+1.12%'},{s:'道琼斯',v:'47,862.19',c:'+0.28%'},{s:'VIX',v:'18.42',c:'−2.16%',down:true}],
   siteName: 'Northstar Markets',
-  marketSubtitle: '查看指数概况与后台发布的模拟项目。',
+  marketSubtitle: '查看指数概况与后台发布的虚拟项目。',
   uiText: {
     workspaceTitle: '工作区', navMarket: '市场概览', navEquity: '合约 ETF', navTime: '时间合约', navPrediction: '预测系统',
     navWatchlist: '自选列表', navPositions: '持仓与订单', navKyc: '身份认证', marketNavTitle: '市场',
@@ -479,7 +492,7 @@ const frontendConfig = {
   },
   homeTitle: '市场概览',
   equityContractTitle: '合约 ETF',
-  equityContractSubtitle: '浏览美股与杠杆 ETF 模拟行情，并使用虚拟账户体验下单。',
+  equityContractSubtitle: '浏览美股与杠杆 ETF 虚拟行情，并使用虚拟账户体验下单。',
   timeContractTitle: '时间合约',
   timeContractSubtitle: '参考交易所短周期合约概率；使用虚拟 PTS 体验独立的 10 / 30 / 60 秒时间合约。',
   predictionTitle: '预测系统',
@@ -488,9 +501,9 @@ const frontendConfig = {
   indexSubtitle: '延时行情 · 仅供展示',
   featuredTitle: '市场精选',
   featuredSubtitle: '查看热门标的与当日表现',
-  demoProjectTitle: '模拟项目',
+  demoProjectTitle: '虚拟项目',
   demoProjectSubtitle: '由后台发布的虚拟标的 · SIM 前缀 · 非实盘行情',
-  orderDisclaimer: '杠杆 ETF 可能放大损失 · 本平台为原型演示',
+  orderDisclaimer: '杠杆 ETF 可能放大损失 · 当前仅提供虚拟体验',
   marketDelayMinutes: 15,
   showMarketOverview: true,
   showEquityContracts: true,
@@ -511,8 +524,8 @@ const frontendConfig = {
   showSettingsNav: true,
   depositNetworks: ['TRC20', 'ERC20', 'Polygon'],
   depositAssets: {
-    USDT: { minimumAmount: 10, instruction: '仅供演示，请勿向此页面提供真实资金。', networks: depositNetworks.map(network => ({ network, address: '', qrUrl: '' })) },
-    USDC: { minimumAmount: 10, instruction: '仅供演示，请勿向此页面提供真实资金。', networks: depositNetworks.map(network => ({ network, address: '', qrUrl: '' })) },
+    USDT: { minimumAmount: 10, instruction: '此页面不处理真实资金，请勿转入资产。', networks: depositNetworks.map(network => ({ network, address: '', qrUrl: '' })) },
+    USDC: { minimumAmount: 10, instruction: '此页面不处理真实资金，请勿转入资产。', networks: depositNetworks.map(network => ({ network, address: '', qrUrl: '' })) },
   },
   minimumWithdrawal: 10,
   withdrawalFee: 0.5,
@@ -525,10 +538,10 @@ const frontendConfig = {
   payoutSensitivity: 30,
 }
 const forecastEvents = [
-  { id: 'EVT-SPY-WEEKLY-CLOSE', category: '美股', question: '标普 500 本周收盘高于本周开盘？', description: '按模拟指数的周线起点与周五收盘价判断。', consensus: 58, horizon: '本周五 16:00 ET', volume: '模拟参与 1,284 人', rewardPercent: 80 },
-  { id: 'EVT-NVDA-NEXT-SESSION', category: '个股', question: '英伟达下一交易日收涨？', description: '比较下一交易日收盘价与前一交易日收盘价。', consensus: 54, horizon: '下一交易日收盘', volume: '模拟参与 962 人', rewardPercent: 75 },
-  { id: 'EVT-VIX-BELOW-20', category: '宏观', question: 'VIX 指数本周保持在 20 以下？', description: '以周内收盘数据为准；本卡片目前仅用于记录判断。', consensus: 67, horizon: '本周五 16:00 ET', volume: '模拟参与 731 人', rewardPercent: 65 },
-  { id: 'EVT-QQQ-ABOVE-LEVEL', category: '指数', question: '纳斯达克 100 本周站上周初水平？', description: '依照模拟行情的周初基准价核对。', consensus: 51, horizon: '本周五 16:00 ET', volume: '模拟参与 588 人', rewardPercent: 80 },
+  { id: 'EVT-SPY-WEEKLY-CLOSE', category: '美股', question: '标普 500 本周收盘高于本周开盘？', description: '按虚拟指数的周线起点与周五收盘价判断。', consensus: 58, horizon: '本周五 16:00 ET', volume: '虚拟参与 1,284 人', rewardPercent: 80 },
+  { id: 'EVT-NVDA-NEXT-SESSION', category: '个股', question: '英伟达下一交易日收涨？', description: '比较下一交易日收盘价与前一交易日收盘价。', consensus: 54, horizon: '下一交易日收盘', volume: '虚拟参与 962 人', rewardPercent: 75 },
+  { id: 'EVT-VIX-BELOW-20', category: '宏观', question: 'VIX 指数本周保持在 20 以下？', description: '以周内收盘数据为准；本卡片目前仅用于记录判断。', consensus: 67, horizon: '本周五 16:00 ET', volume: '虚拟参与 731 人', rewardPercent: 65 },
+  { id: 'EVT-QQQ-ABOVE-LEVEL', category: '指数', question: '纳斯达克 100 本周站上周初水平？', description: '依照虚拟行情的周初基准价核对。', consensus: 51, horizon: '本周五 16:00 ET', volume: '虚拟参与 588 人', rewardPercent: 80 },
 ]
 const adminKey = process.env.ADMIN_REVIEW_KEY || 'local-demo-admin'
 const port = Number(process.env.API_PORT || 8787)
@@ -549,7 +562,7 @@ app.post('/api/auth/signup', async (req, res) => {
     return res.status(400).json({ error: '邮箱格式无效，密码须为 8–128 位' })
   }
   if (!platformDatabaseConfig() && !process.env.VERCEL) {
-    if ([...userAccounts.values()].some(account => account.email === email)) return res.status(409).json({ error: '该邮箱已创建本地演示账户' })
+    if ([...userAccounts.values()].some(account => account.email === email)) return res.status(409).json({ error: '该邮箱已创建本地虚拟账户' })
     const personalId = `NST-${randomBytes(4).toString('hex').toUpperCase()}`
     userAccounts.set(personalId, { personalId, email, createdAt: new Date().toISOString(), inviterId: '', agentId: '' })
     return res.status(201).json({ ok: true, account: { personalId, email, kycStatus: 'unverified' }, demoOnly: true })
@@ -577,7 +590,7 @@ app.post('/api/auth/signup', async (req, res) => {
 })
 
 app.post('/api/auth/login', async (req, res) => {
-  if (!platformDatabaseConfig() && !process.env.VERCEL) return res.status(503).json({ error: '本地演示账户不验证密码；公网账户可使用 Supabase Auth 登录' })
+  if (!platformDatabaseConfig() && !process.env.VERCEL) return res.status(503).json({ error: '本地虚拟账户不验证密码；公网账户可使用 Supabase Auth 登录' })
   if (!platformDatabaseConfig()) return res.status(503).json({ error: '账户服务暂未配置，请稍后重试' })
   const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : ''
   const password = req.body?.password
@@ -1180,7 +1193,7 @@ async function syncExchangeEvents() {
     id: item.platformEventId,
     category: item.category,
     question: item.question,
-    description: `同步自 ${item.exchange}；此平台的下单与余额使用本平台模拟积分。交易所参考概率 ${item.probability}%。`,
+    description: `同步自 ${item.exchange}；此平台的下单与余额使用本平台虚拟积分。交易所参考概率 ${item.probability}%。`,
     consensus: item.probability,
     horizon: item.endTime ? new Date(item.endTime).toLocaleString('zh-CN') : '交易所市场开放中',
     volume: `${Math.round(item.volume).toLocaleString('en-US')}（交易所）`,
@@ -1284,7 +1297,7 @@ async function syncMarketQuotes() {
       marketQuotesCache = { payload, expiresAt: Date.now() + 15 * 60 * 1000 }
       return payload
     } catch (error) {
-      return { provider: 'Twelve Data', configured: true, connected: false, message: error instanceof Error ? `Twelve Data 行情连接失败：${error.message}` : 'Twelve Data 行情连接失败；当前显示演示价格。', updatedAt: marketQuotesCache.payload?.updatedAt || null, quotes: marketQuotesCache.payload?.quotes || {} }
+      return { provider: 'Twelve Data', configured: true, connected: false, message: error instanceof Error ? `Twelve Data 行情连接失败：${error.message}` : 'Twelve Data 行情连接失败；当前显示虚拟价格。', updatedAt: marketQuotesCache.payload?.updatedAt || null, quotes: marketQuotesCache.payload?.quotes || {} }
     }
   }
   const apiKey = process.env.MASSIVE_API_KEY?.trim()
@@ -1319,7 +1332,7 @@ async function syncMarketQuotes() {
     marketQuotesCache = { payload, expiresAt: Date.now() + 60000 }
     return payload
   } catch (error) {
-    return { provider: 'Massive', configured: true, connected: false, message: error instanceof Error ? `Massive 行情连接失败：${error.message}` : 'Massive 行情连接失败；当前显示演示价格。', updatedAt: marketQuotesCache.payload?.updatedAt || null, quotes: marketQuotesCache.payload?.quotes || {} }
+    return { provider: 'Massive', configured: true, connected: false, message: error instanceof Error ? `Massive 行情连接失败：${error.message}` : 'Massive 行情连接失败；当前显示虚拟价格。', updatedAt: marketQuotesCache.payload?.updatedAt || null, quotes: marketQuotesCache.payload?.quotes || {} }
   }
 }
 
@@ -1376,8 +1389,8 @@ app.patch('/api/admin/front-config', requirePermission('front-config'), (req, re
   const payoutMin = Number(input.payoutMinPercent)
   const payoutMax = Number(input.payoutMaxPercent)
   const payoutSensitivity = Number(input.payoutSensitivity)
-  if (![0, 15, 30, 60].includes(delay) || !Number.isFinite(minimumWithdrawal) || minimumWithdrawal < 1 || minimumWithdrawal > 100000 || !Number.isFinite(withdrawalFee) || withdrawalFee < 0 || withdrawalFee > 100 || !Number.isInteger(maxEtfLeverage) || maxEtfLeverage < 1 || maxEtfLeverage > 100 || !Number.isInteger(payout) || payout < 1 || payout > 200 || !Number.isInteger(payoutMin) || payoutMin < 1 || payoutMin > 200 || !Number.isInteger(payoutMax) || payoutMax < payoutMin || payoutMax > 200 || !Number.isInteger(payoutSensitivity) || payoutSensitivity < 0 || payoutSensitivity > 100) return res.status(400).json({ error: '行情延迟、杠杆上限或模拟结算参数无效' })
-  if (!Array.isArray(input.depositNetworks) || !input.depositNetworks.length || input.depositNetworks.some(network => !frontendConfig.depositNetworks.includes(network))) return res.status(400).json({ error: '请选择至少一个支持的演示网络' })
+  if (![0, 15, 30, 60].includes(delay) || !Number.isFinite(minimumWithdrawal) || minimumWithdrawal < 1 || minimumWithdrawal > 100000 || !Number.isFinite(withdrawalFee) || withdrawalFee < 0 || withdrawalFee > 100 || !Number.isInteger(maxEtfLeverage) || maxEtfLeverage < 1 || maxEtfLeverage > 100 || !Number.isInteger(payout) || payout < 1 || payout > 200 || !Number.isInteger(payoutMin) || payoutMin < 1 || payoutMin > 200 || !Number.isInteger(payoutMax) || payoutMax < payoutMin || payoutMax > 200 || !Number.isInteger(payoutSensitivity) || payoutSensitivity < 0 || payoutSensitivity > 100) return res.status(400).json({ error: '行情延迟、杠杆上限或虚拟结算参数无效' })
+  if (!Array.isArray(input.depositNetworks) || !input.depositNetworks.length || input.depositNetworks.some(network => !frontendConfig.depositNetworks.includes(network))) return res.status(400).json({ error: '请选择至少一个支持的充值网络' })
   if (!Array.isArray(input.contractDurations) || !input.contractDurations.length || input.contractDurations.length > 20 || input.contractDurations.some(duration => !Number.isInteger(Number(duration)) || Number(duration) < 5 || Number(duration) > 3600)) return res.status(400).json({ error: '合约期限需为 5–3600 秒之间的整数，最多 20 项' })
   frontendConfig.marketDelayMinutes = delay
   frontendConfig.minimumWithdrawal = rounded(minimumWithdrawal)
@@ -1420,7 +1433,7 @@ app.patch('/api/admin/deposit-config', requirePermission('deposits'), (req, res)
         return res.status(400).json({ error: `${currency} 网络无效或重复` })
       }
       if (typeof network.address !== 'string' || network.address.length > 160) {
-        return res.status(400).json({ error: `${currency} ${network.network} 演示地址最多 160 字` })
+        return res.status(400).json({ error: `${currency} ${network.network} 收款地址最多 160 字` })
       }
       if (typeof network.qrUrl !== 'string' || network.qrUrl.length > 2048 || (network.qrUrl && !/^https:\/\//i.test(network.qrUrl))) {
         return res.status(400).json({ error: `${currency} ${network.network} 二维码链接必须为空或 HTTPS 地址` })
@@ -1441,7 +1454,7 @@ app.put('/api/admin/forecast-events', requirePermission('front-config'), (req, r
     const { id, category, question, description, consensus, horizon } = event || {}
     const rewardPercent = Number(event.rewardPercent ?? 80)
     if (typeof id !== 'string' || !/^EVT-[A-Z0-9-]{3,30}$/.test(id) || typeof category !== 'string' || !category.trim() || category.length > 24 || typeof question !== 'string' || question.trim().length < 5 || question.length > 120 || typeof description !== 'string' || description.length > 280 || !Number.isInteger(Number(consensus)) || Number(consensus) < 1 || Number(consensus) > 99 || !Number.isInteger(rewardPercent) || rewardPercent < 1 || rewardPercent > 200 || typeof horizon !== 'string' || horizon.length > 80) return res.status(400).json({ error: `第 ${index + 1} 条事件字段无效` })
-    normalized.push({ id, category: category.trim(), question: question.trim(), description: description.trim(), consensus: Number(consensus), horizon: horizon.trim(), volume: event.volume || '模拟参与 0 人', rewardPercent })
+    normalized.push({ id, category: category.trim(), question: question.trim(), description: description.trim(), consensus: Number(consensus), horizon: horizon.trim(), volume: event.volume || '虚拟参与 0 人', rewardPercent })
   }
   if (new Set(normalized.map(event => event.id)).size !== normalized.length) return res.status(400).json({ error: '预测事件 ID 不能重复' })
   forecastEvents.splice(0, forecastEvents.length, ...normalized)
@@ -1654,7 +1667,7 @@ async function applyAdminOrderResult(kind, id, result, res, { actor = 'superadmi
       return res.status(503).json({ error: '订单读取失败，请稍后重试' })
     }
   }
-  if (!order) return res.status(404).json({ error: '未找到该模拟订单' })
+  if (!order) return res.status(404).json({ error: '未找到该虚拟订单' })
 
   // Settlement is a one-way transition. Repeated clicks with the same result
   // are harmless; changing an already settled result needs an audited correction flow.
@@ -1725,9 +1738,9 @@ app.patch('/api/admin/orders/:kind/:id/result', requirePermission('prediction-pr
 
 app.post('/api/admin/projects', requirePermission('projects'), (req, res) => {
   const values = req.body || {}
-  if (!validProjectInput(values)) return res.status(400).json({ error: '项目代码须为 SIM- 前缀，价格须大于 0，模拟曲线变化限制在 ±20%' })
+  if (!validProjectInput(values)) return res.status(400).json({ error: '项目代码须为 SIM- 前缀，价格须大于 0，虚拟曲线变化限制在 ±20%' })
   const symbol = values.symbol.trim().toUpperCase()
-  if ([...projects.values()].some(project => project.symbol === symbol)) return res.status(409).json({ error: '该模拟项目代码已存在' })
+  if ([...projects.values()].some(project => project.symbol === symbol)) return res.status(409).json({ error: '该虚拟项目代码已存在' })
   const startPrice = rounded(Number(values.startPrice))
   const targetChangePct = Number(values.targetChangePct)
   const curve = buildCurve(startPrice, targetChangePct, projects.size)
@@ -1738,11 +1751,11 @@ app.post('/api/admin/projects', requirePermission('projects'), (req, res) => {
 
 app.patch('/api/admin/projects/:id', requirePermission('projects'), (req, res) => {
   const project = projects.get(req.params.id)
-  if (!project) return res.status(404).json({ error: '未找到演示项目' })
+  if (!project) return res.status(404).json({ error: '未找到虚拟项目' })
   const { startPrice = project.startPrice, targetChangePct = project.targetChangePct, name = project.name, symbol = project.symbol, visible = project.visible, sortOrder = project.sortOrder } = req.body || {}
   if (!validProjectInput({ symbol, name, startPrice, targetChangePct }) || typeof visible !== 'boolean' || !Number.isInteger(Number(sortOrder)) || Number(sortOrder) < 0 || Number(sortOrder) > 999) return res.status(400).json({ error: '项目信息无效：检查 SIM 代码、名称、价格、显示状态和排序（0–999）' })
   const normalizedSymbol = symbol.trim().toUpperCase()
-  if ([...projects.values()].some(item => item.id !== project.id && item.symbol === normalizedSymbol)) return res.status(409).json({ error: '该模拟项目代码已存在' })
+  if ([...projects.values()].some(item => item.id !== project.id && item.symbol === normalizedSymbol)) return res.status(409).json({ error: '该虚拟项目代码已存在' })
   project.symbol = normalizedSymbol
   project.name = name.trim()
   const startPriceChanged = Number(startPrice) !== project.startPrice
@@ -1759,14 +1772,14 @@ app.patch('/api/admin/projects/:id', requirePermission('projects'), (req, res) =
 })
 
 app.delete('/api/admin/projects/:id', requirePermission('projects'), (req, res) => {
-  if (!projects.has(req.params.id)) return res.status(404).json({ error: '未找到演示项目' })
+  if (!projects.has(req.params.id)) return res.status(404).json({ error: '未找到虚拟项目' })
   projects.delete(req.params.id)
   res.json({ ok: true })
 })
 
 app.patch('/api/admin/projects/:id/preview-points', requirePermission('projects'), (req, res) => {
   const project = projects.get(req.params.id)
-  if (!project) return res.status(404).json({ error: '未找到演示项目' })
+  if (!project) return res.status(404).json({ error: '未找到虚拟项目' })
   const points = req.body?.points
   const minimum = project.startPrice * 0.8
   const maximum = project.startPrice * 1.2
@@ -1780,7 +1793,7 @@ app.patch('/api/admin/projects/:id/preview-points', requirePermission('projects'
 
 app.patch('/api/admin/projects/:id/market-points', requirePermission('projects'), (req, res) => {
   const project = projects.get(req.params.id)
-  if (!project) return res.status(404).json({ error: '未找到演示项目' })
+  if (!project) return res.status(404).json({ error: '未找到虚拟项目' })
   const points = req.body?.points
   const intervalSeconds = Number(req.body?.intervalSeconds ?? 5)
   const minimum = project.startPrice * 0.8
@@ -1857,7 +1870,7 @@ app.post('/api/admin/agents/register', async (req, res) => {
     return res.status(400).json({ error: '注册链接或注册资料无效，请重新打开代理邀请链接' })
   }
   if (agentRegistrations.has(personalId) || [...agentRegistrations.values()].some(registration => registration.email === email)) {
-    return res.status(409).json({ error: '该演示账户已登记，请勿重复注册' })
+    return res.status(409).json({ error: '该虚拟账户已登记，请勿重复注册' })
   }
   const agent = [...agents.values()].find(item => item.code === code && item.active)
   if (!agent) return res.status(404).json({ error: '代理邀请链接无效或代理已停用' })
@@ -1985,7 +1998,7 @@ app.post('/api/referrals/register', async (req, res) => {
     return res.status(400).json({ error: '个人邀请链接或注册资料无效' })
   }
   if (userReferralRegistrations.has(personalId) || [...userReferralRegistrations.values()].some(item => item.email === email)) {
-    return res.status(409).json({ error: '该演示账户已登记邀请关系' })
+    return res.status(409).json({ error: '该虚拟账户已登记邀请关系' })
   }
   const createdAt = new Date().toISOString()
   if (platformDatabaseConfig()) {
@@ -2041,7 +2054,7 @@ app.post('/api/forecasts', requireMember, async (req, res) => {
     try { await syncExchangeEvents() } catch {}
     event = syncedExchangeEvents.get(eventId)
   }
-  if (!event) return res.status(404).json({ error: '未找到该模拟预测事件' })
+  if (!event) return res.status(404).json({ error: '未找到该虚拟预测事件' })
   const choice = requestedChoice === 'YES' || requestedChoice === 'NO' ? requestedChoice : null
   const value = choice ? (choice === 'YES' ? 75 : 25) : Number(probability)
   if (!Number.isInteger(value) || value < 1 || value > 99 || !Number.isInteger(stake) || stake < 10 || stake > 1000 || typeof rationale !== 'string' || rationale.length > 280) return res.status(400).json({ error: '概率范围为 1–99%，虚拟积分投入为 10–1000，说明最多 280 字' })
@@ -2050,7 +2063,7 @@ app.post('/api/forecasts', requireMember, async (req, res) => {
   const existing = forecasts.get(key) || storedOrders?.find(row => row.kind === 'forecasts' && row.item.eventId === eventId)?.item
   if (existing && existing.status !== 'pending') return res.status(409).json({ error: '该预测已结算，不能修改或重复投入' })
   const balance = await loadVirtualPointsBalance(personalId)
-  if (!existing && balance < stake) return res.status(400).json({ error: '虚拟积分余额不足' })
+  if (!existing && balance < stake) return res.status(400).json({ error: '账户积分余额不足' })
   if (!existing && !platformDatabaseConfig()) virtualBalances.set(personalId, rounded(balance - stake))
   const item = {
     ...(existing || {}),
@@ -2105,7 +2118,7 @@ app.get('/api/etf-orders', requireMember, async (req, res) => {
 
 app.post('/api/etf-orders', requireMember, async (req, res) => {
   if (!frontendConfig.showEquityContracts) return res.status(403).json({ error: '后台已关闭合约 ETF 模块' })
-  if (!frontendConfig.demoOrdersEnabled) return res.status(403).json({ error: '后台已暂停模拟下单' })
+  if (!frontendConfig.demoOrdersEnabled) return res.status(403).json({ error: '后台已暂停虚拟下单' })
   const { symbol, side, orderType = 'market' } = req.body || {}
   const personalId = req.member.personalId
   const quantity = Number(req.body?.quantity)
@@ -2113,10 +2126,10 @@ app.post('/api/etf-orders', requireMember, async (req, res) => {
   if (!validPersonalId(personalId)) return res.status(400).json({ error: '请先注册并绑定个人 ID' })
   if (typeof symbol !== 'string' || typeof side !== 'string' || !['buy', 'sell'].includes(side) ||
       !['market', 'limit'].includes(orderType) || !Number.isInteger(quantity) || quantity < 1 || quantity > 10000 || !Number.isInteger(leverage) || leverage < 1 || leverage > frontendConfig.maxEtfLeverage) {
-    return res.status(400).json({ error: '模拟订单代码、方向、类型或股数无效' })
+    return res.status(400).json({ error: '虚拟订单代码、方向、类型或股数无效' })
   }
   const asset = frontendConfig.marketAssets.find(item => item.symbol === symbol)
-  if (!asset) return res.status(404).json({ error: '未找到该模拟标的' })
+  if (!asset) return res.status(404).json({ error: '未找到该虚拟标的' })
   if (process.env.MASSIVE_API_KEY?.trim()) await syncMarketQuotes()
   const executionPrice = marketQuotesCache.payload?.quotes?.[symbol]?.last ?? asset.last
   const amount = rounded(quantity * executionPrice)
@@ -2151,7 +2164,7 @@ app.post('/api/time-contracts', requireMember, async (req, res) => {
     try { await syncTimeContractProjects(true) } catch {}
     project = syncedTimeContractProjects.get(projectId)
   }
-  if (!project) return res.status(404).json({ error: '请选择一个后台已发布的 SIM 演示项目' })
+  if (!project) return res.status(404).json({ error: '请选择一个后台已发布的 SIM 项目' })
   if (project.sourceExchange) return res.status(400).json({ error: '交易所同步数据是 YES/NO 概率参考，不是可用于方向结算的标的价格；请选择后台发布的 SIM 价格项目' })
   const duration = Number(durationSeconds)
   const amount = Number(stake)
@@ -2159,7 +2172,7 @@ app.post('/api/time-contracts', requireMember, async (req, res) => {
     return res.status(400).json({ error: '预测方向、期限或虚拟积分金额无效' })
   }
   const balance = await loadVirtualPointsBalance(personalId)
-  if (balance < amount) return res.status(400).json({ error: '虚拟积分余额不足' })
+  if (balance < amount) return res.status(400).json({ error: '账户积分余额不足' })
   if (!platformDatabaseConfig()) virtualBalances.set(personalId, balance - amount)
   const createdAtMs = Date.now()
   const createdAt = new Date(createdAtMs).toISOString()
@@ -2281,7 +2294,7 @@ app.get('/api/wallet', requireMember, async (req, res) => {
 })
 
 app.post('/api/wallet/deposits', requireMember, async (req, res) => {
-  if (!frontendConfig.showDeposit) return res.status(403).json({ error: '后台已关闭演示充值' })
+  if (!frontendConfig.showDeposit) return res.status(403).json({ error: '后台已关闭虚拟充值' })
   if (!verifyWalletRequest(req, res)) return
   const personalId = req.member.personalId
   const { amount, network } = req.body || {}
@@ -2289,7 +2302,7 @@ app.post('/api/wallet/deposits', requireMember, async (req, res) => {
   const value = Number(amount)
   const currencyConfig = frontendConfig.depositAssets[currency]
   if (!currencyConfig || !Number.isFinite(value) || value < currencyConfig.minimumAmount || value > 100000 || !currencyConfig.networks.some(item => item.network === network)) {
-    return res.status(400).json({ error: '充值币种、金额或网络无效，请检查后台演示配置' })
+    return res.status(400).json({ error: '充值币种、金额或网络无效，请检查后台虚拟配置' })
   }
   if (platformDatabaseConfig()) {
     try {
@@ -2300,7 +2313,7 @@ app.post('/api/wallet/deposits', requireMember, async (req, res) => {
       return res.status(201).json({ transaction: safeTransaction(item), balance: Number(result.balance), currency })
     } catch (error) {
       console.error('Unable to persist simulated deposit', error)
-      return res.status(503).json({ error: '模拟充值暂未记账，请稍后重试' })
+      return res.status(503).json({ error: '虚拟充值暂未记账，请稍后重试' })
     }
   }
   const item = { id: randomUUID(), personalId, type: 'deposit', currency, amount: rounded(value), fee: 0, network, address: '', status: 'completed', reason: '', createdAt: new Date().toISOString(), reviewedAt: new Date().toISOString() }
@@ -2311,22 +2324,22 @@ app.post('/api/wallet/deposits', requireMember, async (req, res) => {
 })
 
 app.post('/api/wallet/withdrawals', requireMember, async (req, res) => {
-  if (!frontendConfig.showWithdrawal) return res.status(403).json({ error: '后台已关闭演示提现' })
+  if (!frontendConfig.showWithdrawal) return res.status(403).json({ error: '后台已关闭虚拟提现' })
   if (!verifyWalletRequest(req, res)) return
   const personalId = req.member.personalId
   const { amount, network, address } = req.body || {}
   const value = Number(amount)
   if (!Number.isFinite(value) || value < frontendConfig.minimumWithdrawal || value > 100000 || !frontendConfig.depositNetworks.includes(network)) {
-    return res.status(400).json({ error: '提现金额或演示网络无效，请检查后台配置' })
+    return res.status(400).json({ error: '提现金额或网络无效，请检查后台配置' })
   }
   if (typeof address !== 'string' || address.trim().length < 12 || address.trim().length > 160) {
-    return res.status(400).json({ error: '请输入有效的演示收款地址' })
+    return res.status(400).json({ error: '请输入有效的收款地址' })
   }
   const fee = frontendConfig.withdrawalFee
   const snapshot = await loadWalletSnapshot(personalId)
   const balance = snapshot.balances.USDT || 0
   const total = rounded(value + fee)
-  if (balance < total) return res.status(400).json({ error: 'USDT 可用余额不足（提现金额另计演示手续费）' })
+  if (balance < total) return res.status(400).json({ error: 'USDT 可用余额不足（提现金额另计虚拟手续费）' })
   if (platformDatabaseConfig()) {
     try {
       const result = await platformDatabaseRpc('apply_wallet_transaction', {

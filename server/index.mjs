@@ -1638,6 +1638,7 @@ app.get('/api/admin/orders', requirePermission('prediction-preview'), async (_re
 async function applyAdminOrderResult(kind, id, result, res, { actor = 'superadmin', rationale = '' } = {}) {
   if (!['contracts', 'forecasts', 'etfOrders'].includes(kind)) return res.status(404).json({ error: '订单类型无效' })
   if (!['won', 'lost'].includes(result)) return res.status(400).json({ error: '订单结果必须为赢或输' })
+  if (process.env.VERCEL || platformDatabaseConfig()) return res.status(403).json({ error: '公网或数据库环境禁止后台手动指定订单输赢；订单必须由冻结的行情快照或可审计的客观结算源得出' })
   if (typeof id !== 'string' || !id || id.length > 100) return res.status(400).json({ error: '订单 ID 无效' })
   if ((process.env.VERCEL || platformDatabaseConfig()) && kind === 'contracts') return res.status(403).json({ error: '已连接数据库的时间合约按到期时点和订单冻结的 SIM 价格快照自动结算，后台不可手动改写结果' })
   if (typeof rationale !== 'string' || rationale.trim().length < 10 || rationale.length > 500) return res.status(400).json({ error: '结算依据须为 10–500 个字符' })

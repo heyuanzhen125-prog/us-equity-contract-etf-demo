@@ -63,6 +63,8 @@ export default function AdminPredictionPreviewView({ adminKey }: { adminKey: str
     pendingForecasts: 0,
     pendingEtfOrders: 0,
     manualOutcomePoliciesEnabled: import.meta.env.DEV,
+    executionMode: import.meta.env.DEV ? 'local-sandbox' : 'protected-hosted',
+    sandboxOnly: true,
     automaticTimeSettlementEnabled: false,
   })
   const [orders, setOrders] = useState<Order[]>([])
@@ -235,7 +237,7 @@ export default function AdminPredictionPreviewView({ adminKey }: { adminKey: str
           ] as const).map(([value, label]) => <button key={value} className={orderFilter === value ? 'active' : ''} onClick={() => setOrderFilter(value)}>{label}</button>)}
         </div>
       </div>
-      <label className="settlement-rationale-field">结算依据（单笔复核必填）<textarea value={settlementRationale} onChange={event => setSettlementRationale(event.target.value)} maxLength={500} rows={2} placeholder="填写事件来源、结算依据或复核说明，至少 10 个字符"/></label>
+      {snapshot.executionMode === 'local-sandbox' && <label className="settlement-rationale-field">沙盒复核说明（单笔测试必填）<textarea value={settlementRationale} onChange={event => setSettlementRationale(event.target.value)} maxLength={500} rows={2} placeholder="填写本地测试说明，至少 10 个字符"/></label>}
       {filteredOrders.length === 0 ? <div className="admin-orders-empty">暂无符合条件的前台订单。用户在前台下单或保存预测后，会显示在这里。</div> : <div className="admin-orders-list">
         {filteredOrders.map(order => <article className="admin-order-row" key={`${order.kind}:${order.id}`}>
           <div className="admin-order-summary">
@@ -252,8 +254,9 @@ export default function AdminPredictionPreviewView({ adminKey }: { adminKey: str
           </div>
           <div className="admin-order-actions">
             {order.status === 'pending' && order.kind === 'contracts' && snapshot.automaticTimeSettlementEnabled && <small className="settlement-auto-note">到期自动按冻结的 SIM 曲线快照结算</small>}
-            {order.status === 'pending' && !(order.kind === 'contracts' && snapshot.automaticTimeSettlementEnabled) && <><button className="outcome-win" onClick={() => void setOrderResult(order, 'won')} disabled={busy || settlementRationale.trim().length < 10}>复核为赢</button>
-            <button className="outcome-loss" onClick={() => void setOrderResult(order, 'lost')} disabled={busy || settlementRationale.trim().length < 10}>复核为输</button></>}
+            {order.status === 'pending' && snapshot.executionMode === 'local-sandbox' && !(order.kind === 'contracts' && snapshot.automaticTimeSettlementEnabled) && <><button className="outcome-win" onClick={() => void setOrderResult(order, 'won')} disabled={busy || settlementRationale.trim().length < 10}>沙盒设为赢</button>
+            <button className="outcome-loss" onClick={() => void setOrderResult(order, 'lost')} disabled={busy || settlementRationale.trim().length < 10}>沙盒设为输</button></>}
+            {order.status === 'pending' && snapshot.executionMode !== 'local-sandbox' && !(order.kind === 'contracts' && snapshot.automaticTimeSettlementEnabled) && <small className="settlement-auto-note">线上禁止手动改写结果；等待客观结算源</small>}
           </div>
         </article>)}
       </div>}

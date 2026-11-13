@@ -29,6 +29,8 @@ npm run dev
 环境变量样例见 `.env.example`。不要把生产密钥提交到 GitHub，也不要把服务端 Supabase 密钥放进 `VITE_` 变量。
 Alpaca 行情密钥只配置到本地 `.env` 或 Vercel 服务端环境变量；不要粘贴到聊天或前端代码。公网展示需要先获得数据方授权，再设置 `ALPACA_PUBLIC_DISPLAY_AUTHORIZED=true`。
 
+部署步骤和当前交付边界见 [产品交付手册](docs/PRODUCT-HANDOFF.md)。新环境需要在 Vercel 配置 `ADMIN_REVIEW_KEY`、`SUPABASE_URL` 与 `SUPABASE_SECRET_KEY`，并按顺序应用 Supabase 数据库迁移。
+
 ## 美国真实证券交易发布路线
 
 本项目不会自行托管客户证券或资金。计划采用**持牌券商合作**，先接普通股票/ETF 的账户、资金、订单、成交、持仓和对账接口；模拟余额和后台手动输赢逻辑不能迁移到真实订单。美国券商/交易平台可能承担受监管活动，SEC 的券商注册指南说明了常见注册与成员要求；产品上线前需要由美国证券律师结合最终业务结构审查，而不能仅凭软件实现判断资格。[SEC：Broker-Dealer Registration Guide](https://www.sec.gov/divisions/marketreg/bdguide.htm)

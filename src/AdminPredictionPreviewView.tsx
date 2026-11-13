@@ -36,6 +36,8 @@ type ControlsSnapshot = {
   pendingForecasts: number
   pendingEtfOrders: number
   manualOutcomePoliciesEnabled?: boolean
+  executionMode?: 'local-sandbox' | 'protected-hosted'
+  sandboxOnly?: boolean
   automaticTimeSettlementEnabled?: boolean
 }
 type ControlDraft = { scope: 'all' | 'user'; personalId: string }
@@ -205,16 +207,16 @@ export default function AdminPredictionPreviewView({ adminKey }: { adminKey: str
         : kind === 'forecasts'
           ? '待结算及后续预测按此结果结算；赢按事件收益比例返还虚拟积分，输扣除投入。'
           : '现有待处理订单立即结算；新单按订单金额扣款，赢按收益比例返还本金与收益，输扣除投入。'}</small>
-      </> : <div className="project-safety"><ShieldAlert size={15}/><span>公网已关闭批量和个人级强制输赢。模拟订单如需人工复核，必须逐笔填写依据，操作会记录后台账号与审计时间。</span></div>}
+      </> : <div className="project-safety"><ShieldAlert size={15}/><span>批量和个人级输赢规则已关闭：仅能在未连接数据库的本地隔离沙盒中测试，不会作用于公网订单。订单复核需填写依据并记录后台账号与审计时间。</span></div>}
     </section>
   }
 
   return <div className="admin-content sim-preview-page">
     <div className="admin-title-row">
-      <div><div className="admin-eyebrow"><i/> SIM 演示控制</div><h1>输赢结果控制</h1><p>设置前台时间合约、合约 ETF 买卖单与事件预测的虚拟演示结果，可按全体或个人 ID 控制。</p></div>
+      <div><div className="admin-eyebrow"><i/> 本地 SIM 沙盒测试</div><h1>输赢规则测试</h1><p>在无数据库连接的本地隔离环境中，测试时间合约、合约 ETF 与事件预测的批量或个人 ID 结果规则；公网和连接数据库时禁用。</p></div>
       <button className="wallet-refresh" onClick={() => void refresh()} disabled={busy}><RefreshCw size={14} className={busy ? 'spinning' : ''}/>刷新状态</button>
     </div>
-    <div className="project-safety"><ShieldAlert size={16}/><span><b>只作用于虚拟演示账户</b> · 不涉及真实资金或市场。公网关闭批量输赢规则；单笔人工复核需填写依据并写入审计记录。</span></div>
+    <div className="project-safety"><ShieldAlert size={16}/><span><b>仅限本地隔离沙盒</b> · 控制器会在公网部署或配置数据库时关闭；不可用于影响客户账户、真实订单或结算结果。</span></div>
     <section className="outcome-control-grid">
       {renderControls('contracts', '前台时间合约', '控制现有未结算合约及后续新合约的最终输赢结果。')}
       {renderControls('forecasts', '前台事件预测', '预测记录使用虚拟积分投入；赢返还本金及事件收益，输扣除投入。')}

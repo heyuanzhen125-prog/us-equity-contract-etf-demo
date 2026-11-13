@@ -75,16 +75,14 @@ async function platformDatabaseRpc(functionName, body) {
 
 const persistentStateKey = {
   settings: 'frontend_config', events: 'forecast_events', projects: 'demo_projects',
-  outcomes: 'outcome_policies', roles: 'permission_roles', staff: 'staff_users', agents: 'agents',
+  roles: 'permission_roles', staff: 'staff_users', agents: 'agents',
 }
 
 function snapshotPersistableState() {
-  const serializePolicies = () => Object.fromEntries(Object.entries(outcomePolicies).map(([kind, policy]) => [kind, { all: policy.all, users: Object.fromEntries(policy.users) }]))
   return {
     [persistentStateKey.settings]: frontendConfig,
     [persistentStateKey.events]: forecastEvents,
     [persistentStateKey.projects]: [...projects.values()],
-    [persistentStateKey.outcomes]: serializePolicies(),
     [persistentStateKey.roles]: [...permissionRoles.values()],
     [persistentStateKey.staff]: [...staffUsers.values()],
     [persistentStateKey.agents]: [...agents.values()],
@@ -102,15 +100,6 @@ async function hydratePersistableState() {
   if (Array.isArray(storedProjects)) {
     projects.clear()
     for (const project of storedProjects) if (project?.id) projects.set(project.id, project)
-  }
-  const storedPolicies = state.get(persistentStateKey.outcomes)
-  if (storedPolicies && typeof storedPolicies === 'object') {
-    for (const kind of ['contracts', 'forecasts', 'etfOrders']) {
-      const policy = storedPolicies[kind]
-      if (!policy || typeof policy !== 'object') continue
-      outcomePolicies[kind].all = ['won', 'lost'].includes(policy.all) ? policy.all : null
-      outcomePolicies[kind].users = new Map(Object.entries(policy.users || {}).filter(([id, result]) => validPersonalId(id) && ['won', 'lost'].includes(result)))
-    }
   }
   const storedRoles = state.get(persistentStateKey.roles)
   if (Array.isArray(storedRoles)) {
@@ -1348,7 +1337,11 @@ app.get('/api/public-config', async (_req, res) => {
   res.json({ config, forecastEvents: publicForecastEvents(), marketData: marketDataStatus })
 })
 app.get('/api/forecast-events', (_req, res) => res.json({ events: publicForecastEvents() }))
-app.get('/api/admin/front-config', requirePermission('front-config'), (_req, res) => res.json({ config: frontendConfig, forecastEvents }))
+app.get('/api/admin/front-config', requirePermission('front-config'), (_req, res) => res.json({
+  config: frontendConfig,
+  forecastEvents,
+  persistenceMode: platformDatabaseConfig() ? 'supabase' : 'memory',
+}))
 app.patch('/api/admin/front-config', requirePermission('front-config'), (req, res) => {
   const input = req.body || {}
   const textFields = ['siteName', 'marketSubtitle', 'homeTitle', 'equityContractTitle', 'equityContractSubtitle', 'timeContractTitle', 'timeContractSubtitle', 'predictionTitle', 'predictionSubtitle', 'indexTitle', 'indexSubtitle', 'featuredTitle', 'featuredSubtitle', 'demoProjectTitle', 'demoProjectSubtitle', 'orderDisclaimer']
@@ -1526,8 +1519,11 @@ app.get('/api/admin/projects', requirePermission('projects'), (_req, res) => {
 
 app.get('/api/admin/outcome-controls', requirePermission('prediction-preview'), (_req, res) => {
   const serialize = policy => ({ all: policy.all, users: Object.fromEntries(policy.users) })
+  const sandboxOnly = !process.env.VERCEL && !platformDatabaseConfig()
   res.json({
-    manualOutcomePoliciesEnabled: !process.env.VERCEL,
+    manualOutcomePoliciesEnabled: sandboxOnly,
+    sandboxOnly: true,
+    executionMode: sandboxOnly ? 'local-sandbox' : 'protected-hosted',
     automaticTimeSettlementEnabled: Boolean(process.env.VERCEL || platformDatabaseConfig()),
     policies: { contracts: serialize(outcomePolicies.contracts), forecasts: serialize(outcomePolicies.forecasts), etfOrders: serialize(outcomePolicies.etfOrders) },
     pendingContracts: [...predictions.values()].filter(item => item.status === 'pending').length,
@@ -1537,7 +1533,7 @@ app.get('/api/admin/outcome-controls', requirePermission('prediction-preview'), 
 })
 
 app.put('/api/admin/outcome-controls/:kind', requirePermission('prediction-preview'), (req, res) => {
-  if (process.env.VERCEL) return res.status(403).json({ error: '公网环境已关闭全局或按个人 ID 强制输赢；请在虚拟订单中填写结算依据后逐笔复核' })
+  if (process.env.VERCEL || platformDatabaseConfig()) return res.status(403).json({ error: '批量和个人级输赢控制仅在无数据库连接的本地隔离沙盒可用；前台真实客户订单不支持强制结果' })
   const { kind } = req.params
   if (!['contracts', 'forecasts', 'etfOrders'].includes(kind)) return res.status(404).json({ error: '输赢控制类型无效' })
   const { target, result } = req.body || {}
